@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "maxwell2"
+name = "audezeforlinux"
 version = "0.1.0"
-description = "Safe Linux CLI control tool for the Audeze Maxwell 2 headset and USB dongle"
+description = "Safe Linux CLI control tool for Audeze Maxwell 2 headset and USB dongle"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -20,6 +20,7 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
+audezeforlinux = "maxwell_ctl:main"
 maxwell-ctl = "maxwell_ctl:main"
 
 [tool.setuptools.packages.find]

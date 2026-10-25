@@ -1,4 +1,4 @@
-# maxwell-ctl: Linux Control Tool for Audeze Maxwell 2
+# audezeforlinux: Linux Control Tool for Audeze Maxwell 2
 
 An open-source, safe Linux command-line control tool for the **Audeze Maxwell 2** (and Maxwell 1) gaming headset and USB dongle on Linux (CachyOS, Arch, Fedora, Ubuntu, etc.).
 
@@ -50,99 +50,110 @@ The tool requires Python 3.8+ and uses only the Python standard library.
 
 Run directly:
 ```bash
+./audezeforlinux status
+# or
 ./maxwell_ctl.py status
 ```
 
 Or install locally in editable mode:
 ```bash
 pip install -e .
-maxwell-ctl status
+audezeforlinux status
 ```
 
 ---
 
-## CLI Usage
+## CLI & TUI Usage
 
-### Interactive Live Console Dashboard
-Launch a live keyboard-controlled TUI dashboard directly in your terminal:
+### Interactive Live Console Dashboard & Custom EQ Studio
+Launch the live, zero-scrollback, keyboard & mouse-controlled Studio TUI directly in your terminal:
 ```bash
-maxwell-ctl dashboard
+audezeforlinux dashboard
 ```
-- **Hotkeys**:
-  - `1` – `6`: Instantly activate factory presets (Audeze, Treble, Bass, Immersive, Competition, Footsteps)
-  - `7` – `0`: Instantly activate Custom slots 1 – 4
-  - `s`: Toggle sidetone on / off
-  - `r`: Refresh live telemetry
-  - `q` / `Esc`: Exit
+- **Navigation & Controls**:
+  - `↑` / `↓`: Move cursor across presets and hardware controls (Sidetone, Game/Chat, AI Noise Reduction)
+  - `←` / `→`: Live adjustment of Sidetone volume, Game/Chat mix balance, or AI Noise Reduction modes
+  - `Enter` / `Space` / **Mouse Click**: Instantly activate preset or toggle setting
+  - `Tab` / **Click**: Switch between **Dashboard & Controls** and **Custom EQ Studio**
+  - `r`: Refresh live telemetry from hardware
+  - `q` / `Esc`: Exit cleanly back to your shell
+- **Custom EQ Studio**:
+  - `1` – `4`: Switch between custom hardware slots
+  - `←` / `→` or **Click**: Select frequency band (32Hz to 16kHz)
+  - `↑` / `↓` or `+` / `-`: Tune band gain in ±0.5 dB steps
+  - `s`: **Save directly to Maxwell 2 headset memory** (with automated pre-write backup snapshot)
+  - `p`: Cycle pre-tuned audio curves (Harman Curve, Bass Cannon, FPS Footsteps, V-Shape, Warm Vocal, Flat)
+  - `f`: Flatten all 10 bands to 0.0 dB
 
 ### View Device Status
-Displays the stylized ASCII branding, active preset pill, color battery gauge, mic status, and crossfader slider:
+Displays the stylized branding, active preset pill, battery gauge, mic status, and crossfader slider:
 ```bash
-maxwell-ctl status
+audezeforlinux status
 ```
 *(Add `--plain` for plain ASCII or `--json` for machine-readable JSON output).*
 
 ### Switch Active Preset
 ```bash
 # List all available presets
-maxwell-ctl eq list
+audezeforlinux eq list
 
 # Select by name
-maxwell-ctl eq preset "Bass Boost"
-maxwell-ctl eq preset "Audeze"
+audezeforlinux eq preset "Bass Boost"
+audezeforlinux eq preset "Immersive"
+audezeforlinux eq preset "Audeze"
 
 # Select custom preset slot (1..4)
-maxwell-ctl eq preset "Preset 1"
+audezeforlinux eq preset "Preset 1"
 ```
 
 ### Inspect & Export Custom 10-Band EQ
 ```bash
 # Display 10-band profile for Custom Slot 1 (Preset 1)
-maxwell-ctl eq custom 1
+audezeforlinux eq custom 1
 
 # Export slot profile to a JSON file
-maxwell-ctl eq custom 1 --export my_eq.json
+audezeforlinux eq custom 1 --export my_eq.json
 ```
 
 ### Adjust Sidetone
 ```bash
 # Toggle sidetone on / off
-maxwell-ctl sidetone on
-maxwell-ctl sidetone off
+audezeforlinux sidetone on
+audezeforlinux sidetone off
 
 # Set volume level (0..31)
-maxwell-ctl sidetone 15
+audezeforlinux sidetone 15
 ```
 
 ### Adjust Game / Chat Balance
 ```bash
 # Set Game/Chat mix by Chat percentage:
-maxwell-ctl chatmix 50   # 50% Game / 50% Chat (Center)
-maxwell-ctl chatmix 25   # 75% Game / 25% Chat
-maxwell-ctl chatmix 80   # 20% Game / 80% Chat
+audezeforlinux chatmix 50   # 50% Game / 50% Chat (Center)
+audezeforlinux chatmix 25   # 75% Game / 25% Chat
+audezeforlinux chatmix 80   # 20% Game / 80% Chat
 ```
 
 ### Full Configuration Dump
 Exports current status and all 4 custom EQ profiles as a single JSON file:
 ```bash
-maxwell-ctl dump --out maxwell_backup.json
+audezeforlinux dump --out maxwell_backup.json
 ```
 
 ### State Backups & Recovery
 Every change creates a snapshot in `~/.config/maxwell2/backups/`:
 ```bash
 # List all automated pre-write backups
-maxwell-ctl backup list
+audezeforlinux backup list
 
 # Inspect a specific backup
-maxwell-ctl backup show backup_set_preset_20261025_034403.json
+audezeforlinux backup show backup_set_preset_20261025_034403.json
 ```
 
 ### Dry-Run Simulation Mode
 Inspect exact USB HID report byte layouts without opening or transmitting to the hardware:
 ```bash
-maxwell-ctl --dry-run status
-maxwell-ctl --dry-run eq preset "Immersive"
+audezeforlinux --dry-run status
+audezeforlinux --dry-run eq preset "Immersive"
 ```
 
 ---

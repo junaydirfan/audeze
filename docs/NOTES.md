@@ -61,3 +61,15 @@
   - AI Noise Reduction: `Low`
   - Volume Limiter: `Enabled (85 dB)`
   - Custom EQ Slots 1..4: All 10 bands successfully read from NVDM keys `0xEF00..0xEF03`.
+
+### Interactive TUI & Project Renaming Update
+- **Repo Renaming**: Project officially named `audezeforlinux` (executable `audezeforlinux` with `maxwell-ctl` backward compatibility alias; git remote updated to `https://github.com/junaydirfan/audezeforlinux.git`).
+- **Terminal Scrolling & Escape Sequence Fix**:
+  - Problem 1: `select.select()` 40ms inter-byte timeout in PTY/IDE terminals caused arrow escape sequences (`\x1b[A`) to be misparsed as raw `ESC`, killing the dashboard immediately.
+  - Problem 2: `console.clear()` in non-curses mode repeatedly dumped 35+ lines into the terminal, pushing viewport content into scrollback history and causing continuous downward scrolling.
+  - Problem 3: Mouse clicking on UI elements was unhandled.
+  - Solution: Rebuilt `maxwell2/interactive.py` using Python standard library `curses` (`curses.wrapper`):
+    - **Alternate Screen Buffer**: Uses `\x1b[?1049h`, completely disabling terminal scrollback and eliminating auto-scroll down.
+    - **Native Keypad Handling**: Uses `stdscr.keypad(True)` with `ESCDELAY=25`, natively decoding `curses.KEY_UP`, `KEY_DOWN`, `KEY_LEFT`, `KEY_RIGHT` without escape sequence races.
+    - **Mouse Click Support**: Integrated `curses.mousemask()` registering on-screen `ClickableRegion` boxes. Clicking view tabs, preset rows, sidetone toggles, sliders, EQ bands, and save buttons works natively.
+    - **Studio Grayscale Theme**: Minimalist high-contrast monochrome design with 10-band spectrum analyzer and on-screen hardware save (`s`).

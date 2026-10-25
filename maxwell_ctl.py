@@ -96,9 +96,10 @@ def format_plain_eq(eq_data: dict) -> str:
 
 
 def main():
+    prog_name = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "audezeforlinux"
     parser = argparse.ArgumentParser(
-        prog="maxwell-ctl",
-        description="Safe Linux control CLI for Audeze Maxwell 2 headset and USB dongle.",
+        prog=prog_name,
+        description="audezeforlinux: Safe Linux control tool for Audeze Maxwell 2 headset and USB dongle.",
     )
     parser.add_argument("--device", help="Direct path to /dev/hidraw node (auto-detected by default)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate commands and print bytes without sending")
