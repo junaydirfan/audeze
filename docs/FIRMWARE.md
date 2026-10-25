@@ -109,11 +109,16 @@ audezeforlinux firmware status
 ```
 Queries both dongle and headset, evaluates version parity, and checks if battery is $\ge 50\%$.
 
-### 2. Check for Online Releases & Changelogs
+### 2. Catalog & Package Update Comparison
 ```bash
 audezeforlinux firmware check
+# or compare directly against a downloaded firmware package:
+audezeforlinux firmware check --package path/to/firmware.bin
 ```
-Compares installed firmware against known releases and lists changelog details.
+Evaluates installed firmware against the known baseline catalog or directly against a downloaded official `.bin` package.
+
+> [!NOTE]
+> Audeze does not provide a public, unauthenticated cloud REST API for checking new firmware. By default, `firmware check` evaluates against our offline verified baseline catalog. Use `--package <file.bin>` to compare against a newly acquired firmware binary directly.
 
 ### 3. Deep Package Inspection & Hash Verification
 ```bash

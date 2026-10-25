@@ -309,6 +309,14 @@ class TestCommandBuildersAndParsers(unittest.TestCase):
             res = sim.simulate_transfer()
             self.assertEqual(res["target"], "dongle")
             self.assertGreater(res["total_hid_reports"], 0)
+
+            # Test check_available_updates with package comparison
+            chk_pkg_match = check_available_updates("v1.0.5.7.4", package_path=t_path)
+            self.assertEqual(chk_pkg_match["status"], "VERSION MATCHES INSTALLED")
+            self.assertTrue(chk_pkg_match["package_valid"])
+
+            chk_pkg_upgrade = check_available_updates("v1.0.1.74", package_path=t_path)
+            self.assertEqual(chk_pkg_upgrade["status"], "UPGRADE AVAILABLE")
         finally:
             if os.path.exists(t_path):
                 os.unlink(t_path)

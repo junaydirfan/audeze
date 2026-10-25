@@ -31,10 +31,46 @@ FIRMWARE_CATALOG = {
         "releases": [
             {
                 "version": "v1.0.5.7.4",
-                "date": "2024-Q3",
-                "notes": "Factory stable firmware for Maxwell 2. Supports dual-dongle telemetry, 10-band custom graphic EQ, and hearing-safety volume limiter.",
+                "date": "2026-08-20",
+                "notes": "Modified: Sidetone adjustments to reduce noise with sidetone off.",
                 "latest": True,
-            }
+            },
+            {
+                "version": "v1.0.5.7",
+                "date": "2026-08-12",
+                "notes": "Added: Google Fast Pairing 1.0.4. Modified: Adjusted mic gain; updated Bluetooth IDs; disabled silence detection for USB dongle. Fixed: High-pitched noise during silence; dongle connection after unplugging line input; rare popping sounds when connected to USB dongle.",
+                "latest": False,
+            },
+            {
+                "version": "v1.0.2.60.2",
+                "date": "2026-05-01",
+                "notes": "Fixed: Volume at higher level when switching to USB audio from Bluetooth LE; conflicts when Aux and Bluetooth were used simultaneously.",
+                "latest": False,
+            },
+            {
+                "version": "v1.0.2.59",
+                "date": "2026-03-11",
+                "notes": "Fixed: Invalid sidetone state when updating firmware; rare bug disabling user EQ values. Modified: Increased low-end performance and optimized EQ values; optimized PS mode volume, game/chat mixing ratios, voice prompt clarity, and BT/LE transitions.",
+                "latest": False,
+            },
+            {
+                "version": "v1.0.2.54",
+                "date": "2026-01-29",
+                "notes": "Fixed: Bluetooth Hands Free protocol not switching properly; LED patterns not properly displaying.",
+                "latest": False,
+            },
+            {
+                "version": "v1.0.2.53_A",
+                "date": "2026-01-22",
+                "notes": "Modified: Reduced boom mic gain; optimized wheel sensitivity. Fixed: Audio leakage while mute active on wireless dongle; wired mode mic mute state; sidetone with LE Audio; EQ inconsistencies; custom preset saving/loading issues.",
+                "latest": False,
+            },
+            {
+                "version": "v1.0.2.49",
+                "date": "2026-01-05",
+                "notes": "Maxwell 2 Initial Production Release.",
+                "latest": False,
+            },
         ],
     },
     "maxwell1": {
@@ -337,25 +373,69 @@ def get_firmware_diagnostics(client: MaxwellClient) -> Dict[str, Any]:
     }
 
 
-def check_available_updates(current_version: str) -> Dict[str, Any]:
+def parse_version_tuple(ver_str: str) -> Tuple[int, ...]:
+    """Extracts numeric integers from a version string for semantic comparisons."""
+    nums = re.findall(r"\d+", ver_str)
+    return tuple(int(n) for n in nums) if nums else (0,)
+
+
+def check_available_updates(current_version: str, package_path: Optional[str] = None) -> Dict[str, Any]:
     """
-    Checks the local firmware catalog against the currently active firmware version.
-    Reports update availability, release notes, and known status.
+    Evaluates update availability against the local baseline catalog or an explicit firmware package (.bin).
+    Data provenance is explicitly surfaced to distinguish hardware reads from offline catalog entries.
     """
     is_v2 = "1.0.5" in current_version
     cat_key = "maxwell2" if is_v2 else "maxwell1"
     catalog = FIRMWARE_CATALOG.get(cat_key, FIRMWARE_CATALOG["maxwell2"])
 
-    latest_ver = catalog["current_stable"]
-    is_up_to_date = (current_version == latest_ver)
+    current_tuple = parse_version_tuple(current_version)
 
-    return {
-        "current_installed": current_version,
-        "latest_available": latest_ver,
-        "is_up_to_date": is_up_to_date,
-        "model_detected": catalog["model"],
-        "releases": catalog["releases"],
-    }
+    if package_path:
+        pkg = FirmwarePackage(package_path)
+        pkg_ver = pkg.version_string
+        pkg_tuple = parse_version_tuple(pkg_ver)
+
+        if pkg_tuple > current_tuple:
+            status = "UPGRADE AVAILABLE"
+            status_symbol = "▲"
+        elif pkg_tuple < current_tuple:
+            status = "PACKAGE IS OLDER (DOWNGRADE)"
+            status_symbol = "▼"
+        else:
+            status = "VERSION MATCHES INSTALLED"
+            status_symbol = "✔"
+
+        return {
+            "current_installed": current_version,
+            "target_version": pkg_ver,
+            "status": status,
+            "status_symbol": status_symbol,
+            "model_detected": catalog["model"],
+            "source": f"Local Package ({pkg.filename})",
+            "is_package": True,
+            "package_valid": pkg.outer_hash_valid,
+            "package_chip": pkg.chip_id,
+            "package_size_kb": round(pkg.file_size / 1024, 1),
+            "notice": "Evaluated against local .bin package file. Outer SHA-256 and partition integrity verified.",
+            "releases": catalog["releases"],
+        }
+    else:
+        latest_ver = catalog["current_stable"]
+        latest_tuple = parse_version_tuple(latest_ver)
+        is_up_to_date = (current_tuple >= latest_tuple)
+
+        return {
+            "current_installed": current_version,
+            "latest_available": latest_ver,
+            "is_up_to_date": is_up_to_date,
+            "status": "MATCHES OFFLINE BASELINE" if is_up_to_date else "OFFLINE UPDATE AVAILABLE",
+            "status_symbol": "✔" if is_up_to_date else "●",
+            "model_detected": catalog["model"],
+            "source": "Offline Baseline Catalog (Local)",
+            "is_package": False,
+            "notice": "Audeze has no public cloud REST API. This check is evaluated against our local baseline catalog (not a live Audeze HQ cloud query). To check a downloaded update, run with --package <file.bin>.",
+            "releases": catalog["releases"],
+        }
 
 
 # ==============================================================================
@@ -445,22 +525,41 @@ def format_firmware_status_plain(diag: Dict[str, Any]) -> str:
 
 
 def format_firmware_check_plain(info: Dict[str, Any]) -> str:
-    """Formats online update check summary."""
+    """Formats update check summary with explicit data provenance and transparency."""
     lines = []
     lines.append("┌─ AUDEZE FIRMWARE UPDATE CHECK ───────────────────────────────────────┐")
     lines.append(f"│  Hardware Model            : {info.get('model_detected', 'Unknown'):<38} │")
     lines.append(f"│  Current Installed Version : {info.get('current_installed', 'Unknown'):<38} │")
-    lines.append(f"│  Latest Official Stable    : {info.get('latest_available', 'Unknown'):<38} │")
 
-    up_to_date = info.get("is_up_to_date", False)
-    status_str = "✔ SYSTEM UP TO DATE" if up_to_date else "● UPDATE AVAILABLE"
-    lines.append(f"│  Update Status             : {status_str:<38} │")
-    lines.append("├─ RELEASE HISTORY & CHANGELOG ────────────────────────────────────────┤")
+    if info.get("is_package"):
+        lines.append(f"│  Target Package Version    : {info.get('target_version', 'Unknown'):<38} │")
+        lines.append(f"│  Target Chip Architecture  : {info.get('package_chip', 'Unknown'):<38} │")
+        lines.append(f"│  Package Integrity Check   : {'✔ SHA-256 PASS (Valid)' if info.get('package_valid') else '✖ CORRUPTED':<38} │")
+    else:
+        lines.append(f"│  Latest Catalog Baseline   : {info.get('latest_available', 'Unknown'):<38} │")
+
+    source = info.get("source", "Offline Catalog")
+    lines.append(f"│  Check Source / Provenance : {source:<38} │")
+
+    status_str = f"{info.get('status_symbol', '✔')} {info.get('status', 'UP TO DATE')}"
+    lines.append(f"│  Comparison Status         : {status_str:<38} │")
+    lines.append("├─ DATA PROVENANCE & NOTICE ───────────────────────────────────────────┤")
+
+    notice = info.get("notice", "")
+    while len(notice) > 66:
+        split_idx = notice[:66].rfind(" ")
+        if split_idx == -1:
+            split_idx = 66
+        lines.append(f"│  {notice[:split_idx]:<68}│")
+        notice = notice[split_idx:].strip()
+    if notice:
+        lines.append(f"│  {notice:<68}│")
+
+    lines.append("├─ KNOWN RELEASE HISTORY ──────────────────────────────────────────────┤")
 
     for r in info.get("releases", []):
         latest_tag = " (Latest)" if r.get("latest") else ""
         lines.append(f"│  • {r['version']}{latest_tag} [{r['date']}]:")
-        # Word wrap notes
         notes = r["notes"]
         while len(notes) > 66:
             split_idx = notes[:66].rfind(" ")

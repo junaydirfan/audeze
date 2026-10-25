@@ -155,7 +155,8 @@ def main():
     fw_parser = subparsers.add_parser("firmware", help="Firmware diagnostics, parity verification, and package inspection")
     fw_sub = fw_parser.add_subparsers(dest="firmware_action")
     fw_sub.add_parser("status", help="Read dual dongle & headset firmware status, parity, and safety readiness")
-    fw_sub.add_parser("check", help="Check official firmware catalog and changelog against installed version")
+    fw_check = fw_sub.add_parser("check", help="Check official firmware catalog and changelog against installed version")
+    fw_check.add_argument("--package", "-p", default=None, help="Optional path to a .bin package to verify against installed version")
     fw_inspect = fw_sub.add_parser("inspect", help="Offline inspection and validation of a firmware .bin package")
     fw_inspect.add_argument("file", help="Path to firmware .bin file to inspect")
     fw_unpack = fw_sub.add_parser("unpack", help="Decompress and extract firmware partitions to directory")
@@ -252,7 +253,7 @@ def main():
                     current_ver = fw.get("firmware", "v1.0.5.7.4")
             except Exception:
                 pass
-            res = check_available_updates(current_ver)
+            res = check_available_updates(current_ver, package_path=args.package)
             if args.json:
                 print(json.dumps(res, indent=2))
             else:
