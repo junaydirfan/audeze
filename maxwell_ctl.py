@@ -79,14 +79,13 @@ def format_eq(eq_data: dict) -> str:
     lines.append(f"  {'Band':<6} | {'Frequency':<12} | {'Gain (dB)':<12} | {'Q':<8}")
     lines.append("  " + "-" * 46)
 
-    for band in eq_data.get("bands", []):
-        b_idx = band.get("band_index", 0) + 1
+    for idx, band in enumerate(eq_data.get("bands", []), 1):
         freq = band.get("frequency_hz", 0)
         freq_str = f"{freq:.0f} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
         gain = band.get("gain_db", 0.0)
         gain_str = f"{gain:+.1f} dB"
         q = band.get("q", 1.41)
-        lines.append(f"  {b_idx:<6} | {freq_str:<12} | {gain_str:<12} | {q:<8.2f}")
+        lines.append(f"  {idx:<6} | {freq_str:<12} | {gain_str:<12} | {q:<8.2f}")
 
     lines.append("=" * 60)
     return "\n".join(lines)

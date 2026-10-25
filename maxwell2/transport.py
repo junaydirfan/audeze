@@ -1,6 +1,7 @@
 """
 Low-level Linux hidraw transport for Audeze Maxwell 2.
-Uses Python standard library (os, select, glob).
+Uses Python standard library (os, fcntl, select, glob).
+Supports both USB Control GET_REPORT (HIDIOCGINPUT) and Interrupt IN.
 Supports --dry-run mode to inspect outgoing packets without transmitting.
 """
 
@@ -8,8 +9,11 @@ import os
 import sys
 import glob
 import time
+import fcntl
+import struct
 import select
 from typing import Optional, List, Tuple
+
 from maxwell2.protocol import (
     REPORT_LENGTH,
     REPORT_ID_OUTPUT,
@@ -23,6 +27,15 @@ from maxwell2.protocol import (
 AUDEZE_VID = 0x3329
 KNOWN_PIDS = [0x4B18, 0x4B19, 0x4B1A, 0x4B1E, 0x4B28, 0x4B29, 0x4B2A]
 DONGLE_PIDS = [0x4B18, 0x4B19, 0x4B28, 0x4B29]
+
+# Linux HIDRAW ioctl definitions:
+# HIDIOCGINPUT(len) = _IOC(_IOC_READ|_IOC_WRITE, 'H', 0x0A, len)
+IOC_READ_WRITE = 3
+IOC_TYPE_H = 72  # ord('H')
+
+
+def _HIDIOCGINPUT(length: int) -> int:
+    return (IOC_READ_WRITE << 30) | (length << 16) | (IOC_TYPE_H << 8) | 0x0A
 
 
 class DeviceNotFoundError(Exception):
@@ -47,6 +60,7 @@ class Transport:
         self.is_dongle = True
         self.product_id: Optional[int] = None
         self.input_stream = InputStream()
+        self.pending_notifications: List[bytes] = []
 
     @classmethod
     def find_device(cls) -> Tuple[str, int, bool]:
@@ -93,8 +107,7 @@ class Transport:
             raise DeviceNotFoundError(f"Device node {self.hidraw_path} does not exist.")
 
         try:
-            # Open non-blocking so select can handle timeouts reliably
-            self.fd = os.open(self.hidraw_path, os.O_RDWR | os.O_NONBLOCK)
+            self.fd = os.open(self.hidraw_path, os.O_RDWR)
         except PermissionError:
             raise DevicePermissionError(
                 f"Permission denied accessing {self.hidraw_path}.\n"
@@ -105,7 +118,7 @@ class Transport:
             )
 
         # Drain any pending incoming reports
-        self._drain()
+        self.drain()
 
     def close(self):
         """Closes the hidraw file descriptor."""
@@ -123,24 +136,43 @@ class Transport:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def _drain(self, duration_sec: float = 0.05):
-        """Drains any unread reports left in the OS buffer."""
+    def drain(self, max_rounds: int = 10):
+        """Drains stale input reports from both GET_REPORT and Interrupt IN buffers."""
         if self.dry_run or self.fd is None:
             return
-        end_time = time.time() + duration_sec
-        while time.time() < end_time:
-            r, _, _ = select.select([self.fd], [], [], 0.01)
+
+        empty_count = 0
+        for _ in range(max_rounds):
+            got_data = False
+            # Check HIDIOCGINPUT
+            buf = bytearray(b"\x07" + b"\x00" * 61)
+            try:
+                fcntl.ioctl(self.fd, _HIDIOCGINPUT(REPORT_LENGTH), buf)
+                if buf[1] > 0:
+                    got_data = True
+            except Exception:
+                pass
+
+            # Check Interrupt IN if select indicates readiness
+            r, _, _ = select.select([self.fd], [], [], 0.005)
             if r:
                 try:
                     os.read(self.fd, 64)
+                    got_data = True
                 except Exception:
-                    break
+                    pass
+
+            if got_data:
+                empty_count = 0
             else:
-                break
+                empty_count += 1
+                if empty_count >= 3:
+                    break
+            time.sleep(0.01)
 
     def write_race_packet(self, race_packet: bytes) -> List[bytes]:
         """
-        Frames and transmits a RACE packet over HID output reports.
+        Frames and transmits a RACE packet over HID output reports (Report ID 0x06).
         In dry-run mode, prints the outgoing report bytes and returns them.
         """
         reports = frame_output_reports(race_packet, is_dongle=self.is_dongle)
@@ -162,48 +194,111 @@ class Transport:
 
         return reports
 
+    def poll_input_report(self) -> Optional[bytes]:
+        """Polls one input report via HIDIOCGINPUT or Interrupt IN."""
+        if self.dry_run or self.fd is None:
+            return None
+
+        # 1. Primary: HIDIOCGINPUT (Control GET_REPORT)
+        buf = bytearray(b"\x07" + b"\x00" * 61)
+        try:
+            fcntl.ioctl(self.fd, _HIDIOCGINPUT(REPORT_LENGTH), buf)
+            if buf[1] > 0:
+                return bytes(buf)
+        except Exception:
+            pass
+
+        # 2. Secondary: Interrupt IN
+        r, _, _ = select.select([self.fd], [], [], 0.005)
+        if r:
+            try:
+                data = os.read(self.fd, 64)
+                if data and len(data) >= 3 and data[0] == REPORT_ID_INPUT and data[1] > 0:
+                    return data
+            except Exception:
+                pass
+
+        return None
+
     def read_race_packets(self, timeout_sec: float = 1.0) -> List[bytes]:
         """
-        Reads incoming HID reports and returns reassembled complete RACE packets.
+        Polls incoming HID reports and returns all reassembled complete RACE packets.
         """
         if self.dry_run:
             return []
-
-        if self.fd is None:
-            raise RuntimeError("Transport is not open.")
 
         packets = []
         deadline = time.time() + timeout_sec
 
         while time.time() < deadline:
-            remaining = max(0.01, deadline - time.time())
-            r, _, _ = select.select([self.fd], [], [], remaining)
-            if r:
-                try:
-                    data = os.read(self.fd, 64)
-                    if data:
-                        new_packets = self.input_stream.feed(data)
-                        if new_packets:
-                            packets.extend(new_packets)
-                            # Once we have at least one complete packet, break out
-                            break
-                except BlockingIOError:
-                    continue
-                except Exception as e:
-                    raise IOError(f"Error reading HID report: {e}")
+            report = self.poll_input_report()
+            if report:
+                new_packets = self.input_stream.feed(report)
+                if new_packets:
+                    packets.extend(new_packets)
+                    break
+            time.sleep(0.02)
 
         return packets
 
-    def exchange(self, race_packet: bytes, timeout_sec: float = 1.0) -> Optional[bytes]:
+    def exchange(self, race_packet: bytes, timeout_sec: float = 1.5) -> Optional[bytes]:
         """
-        Sends a RACE packet and waits for its corresponding synchronous response.
+        Transmits a RACE packet and synchronously waits for its matching response.
+        Any asynchronous notifications (0x5D) received along the way are cached in pending_notifications.
         """
+        self.drain(max_rounds=3)
         self.write_race_packet(race_packet)
         if self.dry_run:
             return None
 
-        packets = self.read_race_packets(timeout_sec=timeout_sec)
-        if not packets:
-            raise TimeoutError(f"Timed out waiting for device response to {race_packet.hex(' ')}")
+        expected_cmd = struct.unpack_from("<H", race_packet, 4)[0]
+        deadline = time.time() + timeout_sec
 
-        return packets[0]
+        while time.time() < deadline:
+            report = self.poll_input_report()
+            if report:
+                new_packets = self.input_stream.feed(report)
+                for p in new_packets:
+                    if len(p) >= 6:
+                        direction = p[1]
+                        cmd = struct.unpack_from("<H", p, 4)[0]
+                        if direction == 0x5B and cmd == expected_cmd:
+                            return p
+                        elif direction == 0x5D:
+                            self.pending_notifications.append(p)
+            time.sleep(0.02)
+
+        raise TimeoutError(f"Timed out waiting for device response to command 0x{expected_cmd:04X} ({race_packet.hex(' ')})")
+
+    def query_notification(self, query_packet: bytes, timeout_sec: float = 2.0) -> Optional[bytes]:
+        """
+        Sends a query (e.g. Battery 0x0CD6, Firmware 0x1C07) and waits for its 0x5D notification.
+        """
+        self.drain(max_rounds=3)
+        self.write_race_packet(query_packet)
+        if self.dry_run:
+            return None
+
+        expected_cmd = struct.unpack_from("<H", query_packet, 4)[0]
+
+        # Check if already in pending notifications
+        for idx, p in enumerate(self.pending_notifications):
+            if len(p) >= 6 and p[1] == 0x5D and struct.unpack_from("<H", p, 4)[0] == expected_cmd:
+                return self.pending_notifications.pop(idx)
+
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            report = self.poll_input_report()
+            if report:
+                new_packets = self.input_stream.feed(report)
+                for p in new_packets:
+                    if len(p) >= 6:
+                        direction = p[1]
+                        cmd = struct.unpack_from("<H", p, 4)[0]
+                        if direction == 0x5D and cmd == expected_cmd:
+                            return p
+                        elif direction == 0x5D:
+                            self.pending_notifications.append(p)
+            time.sleep(0.02)
+
+        return None

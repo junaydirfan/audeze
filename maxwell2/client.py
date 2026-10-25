@@ -56,39 +56,30 @@ class MaxwellClient:
 
     def get_battery(self) -> Optional[int]:
         """Queries battery level percentage (0..100)."""
-        packet = build_battery_command()
-        # Battery query sends immediate ACK then async notification (0x5D)
-        self.transport.write_race_packet(packet)
         if self.transport.dry_run:
             return 85
-        # Read incoming reports until the 0x5D battery notification arrives
-        packets = self.transport.read_race_packets(timeout_sec=1.5)
-        for p in packets:
-            if len(p) >= 2 and p[1] == 0x5D:
-                try:
-                    return parse_battery_notification(p)
-                except Exception:
-                    continue
+        packet = build_battery_command()
+        notif = self.transport.query_notification(packet, timeout_sec=2.0)
+        if notif:
+            try:
+                return parse_battery_notification(notif)
+            except Exception:
+                pass
         return None
 
     def get_firmware(self) -> Dict[str, str]:
         """Queries dongle and headset firmware versions."""
         if self.transport.dry_run:
-            return {"dongle": "v1.0.1.74 (Simulated)", "headset": "v1.0.1.74 (Simulated)"}
+            return {"firmware": "v1.0.1.74 (Simulated)"}
 
-        # Query firmware
         packet = build_firmware_command()
-        self.transport.write_race_packet(packet)
-        fw_ver = "Unknown"
-        packets = self.transport.read_race_packets(timeout_sec=1.5)
-        for p in packets:
-            if len(p) >= 2 and p[1] == 0x5D:
-                try:
-                    fw_ver = parse_firmware_notification(p)
-                    break
-                except Exception:
-                    continue
-        return {"firmware": fw_ver}
+        notif = self.transport.query_notification(packet, timeout_sec=2.0)
+        if notif:
+            try:
+                return {"firmware": parse_firmware_notification(notif)}
+            except Exception:
+                pass
+        return {"firmware": "Unknown"}
 
     def get_mic_mute(self) -> Optional[bool]:
         """Reads hardware microphone mute switch state (True = muted, False = unmuted)."""
