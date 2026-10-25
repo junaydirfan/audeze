@@ -1,0 +1,225 @@
+"""
+Unit tests for Audeze Maxwell 2 protocol builder, framer, and parsers.
+Requires NO hardware connection - pure offline packet verification.
+"""
+
+import unittest
+import struct
+from maxwell2.protocol import (
+    build_race_packet,
+    parse_race_packet,
+    frame_output_reports,
+    InputStream,
+    build_read_preset_command,
+    build_select_preset_command,
+    build_battery_command,
+    build_firmware_command,
+    build_read_control_command,
+    build_write_control_command,
+    build_read_ui_eq_command,
+    build_read_coefficients_command,
+    parse_preset_index,
+    parse_battery_notification,
+    parse_firmware_notification,
+    parse_control_response,
+    parse_ui_eq_preset,
+    ProtocolError,
+    CMD_SETTING_READ,
+    CMD_SETTING_WRITE,
+    CMD_BATTERY,
+    CMD_FIRMWARE,
+    CMD_NVDM_READ,
+    SUB_PRESET_INDEX,
+    SUB_MIC_MUTE,
+    SUB_SIDETONE_ON,
+    SUB_CHAT_MIX,
+    SUB_NOISE_REDUCTION,
+    KEY_UI_BASE,
+    KEY_COEFF_BASE,
+    REPORT_ID_OUTPUT,
+    REPORT_ID_INPUT,
+    REPORT_LENGTH,
+)
+
+
+class TestProtocolFraming(unittest.TestCase):
+
+    def test_build_race_packet_header(self):
+        # Read preset command should be: 05 5A 04 00 01 09 00 00
+        packet = build_read_preset_command()
+        expected = bytes.fromhex("05 5A 04 00 01 09 00 00")
+        self.assertEqual(packet, expected)
+
+        cmd, payload = parse_race_packet(packet, expected_dir=0x5A)
+        self.assertEqual(cmd, CMD_SETTING_READ)
+        self.assertEqual(payload, b"\x00\x00")
+
+    def test_frame_output_reports_single(self):
+        packet = build_read_preset_command()  # 8 bytes
+        reports = frame_output_reports(packet, is_dongle=True)
+        self.assertEqual(len(reports), 1)
+        rep = reports[0]
+        self.assertEqual(len(rep), REPORT_LENGTH)
+        self.assertEqual(rep[0], REPORT_ID_OUTPUT)
+        self.assertEqual(rep[1], 8)  # chunk length
+        self.assertEqual(rep[2], 0x80)  # dongle route flag
+        self.assertEqual(rep[3:11], packet)
+        self.assertEqual(rep[11:], b"\x00" * (REPORT_LENGTH - 11))
+
+    def test_frame_output_reports_chunking(self):
+        # 120 bytes of dummy payload -> should split into 3 chunks (59 + 59 + 2)
+        dummy_data = bytes(range(120))
+        reports = frame_output_reports(dummy_data, is_dongle=False)
+        self.assertEqual(len(reports), 3)
+        self.assertEqual(reports[0][1], 59)
+        self.assertEqual(reports[0][2], 0x00)  # direct route
+        self.assertEqual(reports[1][1], 59)
+        self.assertEqual(reports[2][1], 2)
+
+    def test_input_stream_reassembly(self):
+        stream = InputStream()
+        # Complete RACE packet: 05 5B 06 00 01 09 00 00 00 07 (Preset 1 / Custom)
+        race_packet = bytes.fromhex("05 5B 06 00 01 09 00 00 00 07")
+        report = bytes([REPORT_ID_INPUT, len(race_packet), 0x00]) + race_packet
+        report += b"\x00" * (REPORT_LENGTH - len(report))
+
+        packets = stream.feed(report)
+        self.assertEqual(len(packets), 1)
+        self.assertEqual(packets[0], race_packet)
+
+        # Parse preset
+        preset = parse_preset_index(packets[0])
+        self.assertEqual(preset["index"], 7)
+        self.assertEqual(preset["name"], "Preset 1 (Custom)")
+        self.assertTrue(preset["is_custom"])
+        self.assertEqual(preset["slot"], 0)
+
+
+class TestCommandBuildersAndParsers(unittest.TestCase):
+
+    def test_battery_command_and_notification(self):
+        cmd = build_battery_command()
+        self.assertEqual(cmd, bytes.fromhex("05 5A 03 00 D6 0C 00"))
+
+        # Notification: 05 5D 05 00 D6 0C 00 00 55 (status 0, sub 0, 85%)
+        notif = bytes.fromhex("05 5D 05 00 D6 0C 00 00 55")
+        level = parse_battery_notification(notif)
+        self.assertEqual(level, 85)
+
+    def test_firmware_command_and_notification(self):
+        cmd = build_firmware_command()
+        self.assertEqual(cmd, bytes.fromhex("05 5A 03 00 07 1C 00"))
+
+        # Notification with ASCII text: "v1.0.1.74" (len 9)
+        fw_text = b"v1.0.1.74"
+        payload = bytes([0x00, 0x00, len(fw_text)]) + fw_text
+        notif = struct.pack("<BBHH", 0x05, 0x5D, len(payload) + 2, CMD_FIRMWARE) + payload
+        parsed_fw = parse_firmware_notification(notif)
+        self.assertEqual(parsed_fw, "v1.0.1.74")
+
+    def test_select_preset_validation(self):
+        cmd = build_select_preset_command(3)
+        self.assertEqual(cmd, bytes.fromhex("05 5A 05 00 00 09 00 00 03"))
+
+        with self.assertRaises(ProtocolError):
+            build_select_preset_command(0)  # out of bounds
+
+        with self.assertRaises(ProtocolError):
+            build_select_preset_command(11)  # out of bounds
+
+    def test_controls_building_and_parsing(self):
+        # Read mic mute
+        cmd_mute = build_read_control_command(SUB_MIC_MUTE)
+        self.assertEqual(cmd_mute, bytes.fromhex("05 5A 04 00 01 09 22 00"))
+
+        # Parse reply: mic unmuted (0xFF)
+        reply_mute = bytes.fromhex("05 5B 06 00 01 09 22 00 00 FF")
+        val = parse_control_response(reply_mute, SUB_MIC_MUTE)
+        self.assertEqual(val, 0xFF)
+
+        # Write sidetone ON
+        cmd_st = build_write_control_command(SUB_SIDETONE_ON, 1)
+        self.assertEqual(cmd_st, bytes.fromhex("05 5A 05 00 82 2C 07 00 01"))
+
+        # Write Chat Mix to center (10)
+        cmd_cm = build_write_control_command(SUB_CHAT_MIX, 10)
+        self.assertEqual(cmd_cm, bytes.fromhex("05 5A 05 00 82 2C 0B 00 0A"))
+
+        # Write AI Noise Reduction to High (2)
+        cmd_nr = build_write_control_command(SUB_NOISE_REDUCTION, 2)
+        self.assertEqual(cmd_nr, bytes.fromhex("05 5A 05 00 00 09 24 00 02"))
+
+        # Invalid bounds
+        with self.assertRaises(ProtocolError):
+            build_write_control_command(SUB_CHAT_MIX, 25)
+
+    def test_nvdm_keys_and_eq_ui_parser(self):
+        # Read UI key for Slot 0 (Preset 1) -> Key 0xEF00
+        cmd_ui = build_read_ui_eq_command(0)
+        self.assertEqual(cmd_ui, bytes.fromhex("05 5A 06 00 0C 0A 00 EF E8 03"))
+
+        # Read Coeff key for Slot 3 (Preset 4) -> Key 0xE42F
+        cmd_coeff = build_read_coefficients_command(3)
+        self.assertEqual(cmd_coeff, bytes.fromhex("05 5A 06 00 0C 0A 2F E4 E8 03"))
+
+        # Synthesize a valid 10-band slider record for Slot 0:
+        # Header: 5 bytes (0x01, 0x02, 0x03, 0x04, 0x05)
+        # 10 bands x 18 bytes
+        header = b"\x01\x00\x00\x00\x00"
+        bands_data = bytearray()
+        freqs = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+        for idx, freq in enumerate(freqs):
+            # tag=idx, freq=freq*100, gain=+3dB (300), q=141, flags=0
+            bands_data.extend(struct.pack("<Hiiii", idx, freq * 100, 300, 141, 0))
+
+        eq_payload = header + bytes(bands_data)
+        data_len = len(eq_payload)
+        # NVDM read response header: status (0), key (0xEF00), data_len
+        nvdm_resp_payload = struct.pack("<BHH", 0, KEY_UI_BASE, data_len) + eq_payload
+        race_resp = struct.pack("<BBHH", 0x05, 0x5B, len(nvdm_resp_payload) + 2, CMD_NVDM_READ) + nvdm_resp_payload
+
+        parsed = parse_ui_eq_preset(race_resp, expected_slot=0)
+        self.assertEqual(parsed["slot"], 0)
+        self.assertEqual(len(parsed["bands"]), 10)
+        self.assertEqual(parsed["bands"][0]["frequency_hz"], 32.0)
+        self.assertEqual(parsed["bands"][0]["gain_db"], 3.0)
+        self.assertEqual(parsed["bands"][5]["frequency_hz"], 1000.0)
+
+    def test_malformed_race_packets(self):
+        # Bad sync byte
+        with self.assertRaises(ProtocolError):
+            parse_race_packet(bytes.fromhex("04 5A 04 00 01 09 00 00"))
+
+        # Bad length (says 10 bytes, but only 8 provided)
+        with self.assertRaises(ProtocolError):
+            parse_race_packet(bytes.fromhex("05 5A 0A 00 01 09 00 00"))
+
+        # Too short
+        with self.assertRaises(ProtocolError):
+            parse_race_packet(b"\x05\x5A\x02")
+
+    def test_safety_bounds_and_controls(self):
+        # Noise reduction valid: 0, 1, 2
+        build_write_control_command(SUB_NOISE_REDUCTION, 0)
+        build_write_control_command(SUB_NOISE_REDUCTION, 1)
+        build_write_control_command(SUB_NOISE_REDUCTION, 2)
+        with self.assertRaises(ProtocolError):
+            build_write_control_command(SUB_NOISE_REDUCTION, 3)
+
+        # Sidetone enable: only 0 or 1
+        with self.assertRaises(ProtocolError):
+            build_write_control_command(SUB_SIDETONE_ON, 2)
+
+        # Limiter: only 136 or 142
+        build_write_control_command(0x28, 136)
+        build_write_control_command(0x28, 142)
+        with self.assertRaises(ProtocolError):
+            build_write_control_command(0x28, 100)
+
+        # Disallowed control write (Mic mute is read-only)
+        with self.assertRaises(ProtocolError):
+            build_write_control_command(SUB_MIC_MUTE, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

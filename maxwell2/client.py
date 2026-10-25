@@ -1,0 +1,295 @@
+"""
+High-level control client for Audeze Maxwell 2.
+Implements status queries, control adjustments, EQ profile management,
+and pre-write backup snapshots.
+"""
+
+from typing import Dict, Any, Optional, Union, List
+from maxwell2.protocol import (
+    build_read_preset_command,
+    build_select_preset_command,
+    build_battery_command,
+    build_firmware_command,
+    build_read_control_command,
+    build_write_control_command,
+    build_read_ui_eq_command,
+    parse_preset_index,
+    parse_battery_notification,
+    parse_firmware_notification,
+    parse_control_response,
+    parse_ui_eq_preset,
+    SUB_MIC_MUTE,
+    SUB_NOISE_REDUCTION,
+    SUB_AMP_GAIN,
+    SUB_SIDETONE_LEVEL,
+    SUB_MAX_SIDETONE,
+    SUB_SIDETONE_ON,
+    SUB_CHAT_MIX,
+    PRESET_NAMES,
+    LIMITER_ON,
+    LIMITER_OFF,
+    ProtocolError,
+)
+from maxwell2.transport import Transport
+from maxwell2.backup import create_backup, load_backup
+
+
+class MaxwellClient:
+    """
+    Main interface for inspecting and controlling the Audeze Maxwell 2.
+    """
+
+    def __init__(self, transport: Transport):
+        self.transport = transport
+
+    # --------------------------------------------------------------------------
+    # Telemetry & Status Reads
+    # --------------------------------------------------------------------------
+
+    def get_preset(self) -> Dict[str, Any]:
+        """Reads the currently active onboard preset."""
+        packet = build_read_preset_command()
+        resp = self.transport.exchange(packet)
+        if self.transport.dry_run:
+            return {"index": 1, "name": "Audeze (Simulated)", "is_custom": False, "slot": None}
+        return parse_preset_index(resp)
+
+    def get_battery(self) -> Optional[int]:
+        """Queries battery level percentage (0..100)."""
+        packet = build_battery_command()
+        # Battery query sends immediate ACK then async notification (0x5D)
+        self.transport.write_race_packet(packet)
+        if self.transport.dry_run:
+            return 85
+        # Read incoming reports until the 0x5D battery notification arrives
+        packets = self.transport.read_race_packets(timeout_sec=1.5)
+        for p in packets:
+            if len(p) >= 2 and p[1] == 0x5D:
+                try:
+                    return parse_battery_notification(p)
+                except Exception:
+                    continue
+        return None
+
+    def get_firmware(self) -> Dict[str, str]:
+        """Queries dongle and headset firmware versions."""
+        if self.transport.dry_run:
+            return {"dongle": "v1.0.1.74 (Simulated)", "headset": "v1.0.1.74 (Simulated)"}
+
+        # Query firmware
+        packet = build_firmware_command()
+        self.transport.write_race_packet(packet)
+        fw_ver = "Unknown"
+        packets = self.transport.read_race_packets(timeout_sec=1.5)
+        for p in packets:
+            if len(p) >= 2 and p[1] == 0x5D:
+                try:
+                    fw_ver = parse_firmware_notification(p)
+                    break
+                except Exception:
+                    continue
+        return {"firmware": fw_ver}
+
+    def get_mic_mute(self) -> Optional[bool]:
+        """Reads hardware microphone mute switch state (True = muted, False = unmuted)."""
+        packet = build_read_control_command(SUB_MIC_MUTE)
+        resp = self.transport.exchange(packet)
+        if self.transport.dry_run:
+            return False
+        val = parse_control_response(resp, SUB_MIC_MUTE)
+        return val == 0x00
+
+    def get_sidetone(self) -> Dict[str, Any]:
+        """Reads sidetone toggle state and current volume level."""
+        if self.transport.dry_run:
+            return {"enabled": True, "level": 15, "max_level": 31}
+
+        # Sidetone toggle
+        resp_on = self.transport.exchange(build_read_control_command(SUB_SIDETONE_ON))
+        enabled = (parse_control_response(resp_on, SUB_SIDETONE_ON) == 1)
+
+        # Sidetone level
+        resp_lvl = self.transport.exchange(build_read_control_command(SUB_SIDETONE_LEVEL))
+        level = parse_control_response(resp_lvl, SUB_SIDETONE_LEVEL)
+
+        # Max level
+        max_level = 31
+        try:
+            resp_max = self.transport.exchange(build_read_control_command(SUB_MAX_SIDETONE))
+            max_level = parse_control_response(resp_max, SUB_MAX_SIDETONE)
+        except Exception:
+            pass
+
+        return {"enabled": enabled, "level": level, "max_level": max_level}
+
+    def get_chat_mix(self) -> Dict[str, Any]:
+        """Reads Game / Chat mix ratio (0 = 100% Game, 10 = 50/50, 20 = 100% Chat)."""
+        if self.transport.dry_run:
+            return {"raw": 10, "game_pct": 50, "chat_pct": 50}
+
+        resp = self.transport.exchange(build_read_control_command(SUB_CHAT_MIX))
+        raw = parse_control_response(resp, SUB_CHAT_MIX)
+        # raw is 0..20: 0 = 100% Game, 20 = 100% Chat
+        chat_pct = int((raw / 20.0) * 100)
+        game_pct = 100 - chat_pct
+        return {"raw": raw, "game_pct": game_pct, "chat_pct": chat_pct}
+
+    def get_noise_reduction(self) -> Dict[str, Any]:
+        """Reads AI noise suppression mode (0 = Off, 1 = Low, 2 = High)."""
+        if self.transport.dry_run:
+            return {"code": 1, "name": "Low"}
+
+        resp = self.transport.exchange(build_read_control_command(SUB_NOISE_REDUCTION))
+        code = parse_control_response(resp, SUB_NOISE_REDUCTION)
+        names = {0: "Off", 1: "Low", 2: "High"}
+        return {"code": code, "name": names.get(code, f"Unknown ({code})")}
+
+    def get_limiter(self) -> Dict[str, Any]:
+        """Reads Volume Limiter status."""
+        if self.transport.dry_run:
+            return {"enabled": False, "raw": LIMITER_OFF}
+
+        resp = self.transport.exchange(build_read_control_command(SUB_AMP_GAIN))
+        raw = parse_control_response(resp, SUB_AMP_GAIN)
+        enabled = (raw <= LIMITER_ON)
+        return {"enabled": enabled, "raw": raw}
+
+    def get_status(self) -> Dict[str, Any]:
+        """Collects full status information in one dictionary."""
+        return {
+            "preset": self.get_preset(),
+            "battery_percent": self.get_battery(),
+            "firmware": self.get_firmware(),
+            "mic_muted": self.get_mic_mute(),
+            "sidetone": self.get_sidetone(),
+            "chat_mix": self.get_chat_mix(),
+            "noise_reduction": self.get_noise_reduction(),
+            "limiter": self.get_limiter(),
+        }
+
+    # --------------------------------------------------------------------------
+    # Custom EQ Profile Reads & Writes
+    # --------------------------------------------------------------------------
+
+    def read_custom_eq(self, slot: int) -> Dict[str, Any]:
+        """Reads 10-band slider configuration for a custom slot (0..3)."""
+        if not (0 <= slot <= 3):
+            raise ValueError(f"Custom EQ slot must be 0..3 (representing Presets 1..4), got {slot}")
+
+        cmd = build_read_ui_eq_command(slot)
+        resp = self.transport.exchange(cmd)
+        if self.transport.dry_run:
+            freqs = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+            bands = [{"band_index": i, "frequency_hz": f, "gain_db": 0.0, "q": 1.41} for i, f in enumerate(freqs)]
+            return {"slot": slot, "preset_num": slot + 1, "bands": bands, "is_simulated": True}
+
+        return parse_ui_eq_preset(resp, expected_slot=slot)
+
+    def dump_all(self) -> Dict[str, Any]:
+        """Dumps all headset status and all 4 custom EQ profiles as a single JSON export."""
+        status = self.get_status()
+        custom_eqs = {}
+        for s in range(4):
+            try:
+                custom_eqs[f"custom_slot_{s + 1}"] = self.read_custom_eq(s)
+            except Exception as e:
+                custom_eqs[f"custom_slot_{s + 1}"] = {"error": str(e)}
+
+        return {
+            "status": status,
+            "custom_eq_profiles": custom_eqs,
+        }
+
+    # --------------------------------------------------------------------------
+    # Settings Writes (With Pre-Write Backup & Verification)
+    # --------------------------------------------------------------------------
+
+    def set_preset(self, target: Union[int, str]) -> Dict[str, Any]:
+        """
+        Switches active preset (1..10 or preset name).
+        Takes a pre-write backup snapshot before sending the write.
+        """
+        # Resolve target index
+        if isinstance(target, str):
+            target_clean = target.strip().lower()
+            matched_idx = None
+            for idx, name in enumerate(PRESET_NAMES, 1):
+                if target_clean == name.lower() or target_clean in name.lower():
+                    matched_idx = idx
+                    break
+            if matched_idx is None:
+                raise ValueError(f"Unknown preset name '{target}'. Valid names: {PRESET_NAMES}")
+            preset_idx = matched_idx
+        else:
+            preset_idx = int(target)
+            if not (1 <= preset_idx <= 10):
+                raise ValueError(f"Preset index must be 1..10, got {preset_idx}")
+
+        # 1. Take snapshot of current state
+        current_preset = self.get_preset()
+        backup_path = create_backup("set_preset", {"previous_preset": current_preset, "target": preset_idx})
+
+        # 2. Build and transmit write command
+        cmd = build_select_preset_command(preset_idx)
+        self.transport.write_race_packet(cmd)
+
+        if self.transport.dry_run:
+            return {
+                "success": True,
+                "preset": {"index": preset_idx, "name": PRESET_NAMES[preset_idx - 1]},
+                "backup_file": backup_path,
+                "dry_run": True,
+            }
+
+        # 3. Read back to verify
+        new_preset = self.get_preset()
+        if new_preset["index"] != preset_idx:
+            raise RuntimeError(f"Preset change verification failed: expected {preset_idx}, got {new_preset['index']}")
+
+        return {
+            "success": True,
+            "preset": new_preset,
+            "backup_file": backup_path,
+            "dry_run": False,
+        }
+
+    def set_sidetone(self, enabled: Optional[bool] = None, level: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Updates sidetone enable state or volume level.
+        Takes a pre-write backup snapshot before applying.
+        """
+        current = self.get_sidetone()
+        backup_path = create_backup("set_sidetone", {"previous_sidetone": current})
+
+        if enabled is not None:
+            cmd_toggle = build_write_control_command(SUB_SIDETONE_ON, 1 if enabled else 0)
+            self.transport.write_race_packet(cmd_toggle)
+
+        if level is not None:
+            cmd_level = build_write_control_command(SUB_SIDETONE_LEVEL, int(level))
+            self.transport.write_race_packet(cmd_level)
+
+        if self.transport.dry_run:
+            return {"success": True, "sidetone": {"enabled": enabled, "level": level}, "backup_file": backup_path}
+
+        updated = self.get_sidetone()
+        return {"success": True, "sidetone": updated, "backup_file": backup_path}
+
+    def set_chat_mix(self, value: int) -> Dict[str, Any]:
+        """
+        Updates Game/Chat balance (0..20, 10 = 50/50 center).
+        """
+        if not (0 <= value <= 20):
+            raise ValueError(f"Chat mix value must be 0..20, got {value}")
+
+        current = self.get_chat_mix()
+        backup_path = create_backup("set_chat_mix", {"previous_chat_mix": current, "target": value})
+
+        cmd = build_write_control_command(SUB_CHAT_MIX, value)
+        self.transport.write_race_packet(cmd)
+
+        if self.transport.dry_run:
+            return {"success": True, "chat_mix": value, "backup_file": backup_path}
+
+        updated = self.get_chat_mix()
+        return {"success": True, "chat_mix": updated, "backup_file": backup_path}
