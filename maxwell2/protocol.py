@@ -240,6 +240,38 @@ def build_read_coefficients_command(slot: int) -> bytes:
     return build_read_nvdm_key(KEY_COEFF_BASE + slot)
 
 
+def build_write_ui_eq_command(slot: int, bands: List[Dict[str, Any]], header: Optional[bytes] = None) -> bytes:
+    """
+    Builds the 185-byte NVDM write packet for 10-band slider records (Key 0xEF00 + slot).
+    Validates slot (0..3), 10 bands, and gain ranges (-12.0 dB .. +12.0 dB).
+    """
+    if not (0 <= slot <= 3):
+        raise ProtocolError(f"Custom EQ slot must be 0..3, got {slot}")
+    if len(bands) != 10:
+        raise ProtocolError(f"EQ must contain exactly 10 bands, got {len(bands)}")
+
+    if header is None or len(header) != 5:
+        header = b"\x01\x00\x00\x00\x00"
+
+    raw_payload = bytearray(header)
+    STANDARD_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+
+    for i in range(10):
+        b = bands[i]
+        freq = b.get("frequency_hz", STANDARD_FREQS[i])
+        gain = float(b.get("gain_db", 0.0))
+        if not (-12.0 <= gain <= 12.0):
+            raise ProtocolError(f"Band {i+1} gain out of range (-12..+12 dB): {gain}")
+        tag = b.get("band_index", 513)
+        freq_100 = int(round(freq * 100))
+        gain_100 = int(round(gain * 100))
+        q_100 = int(round(b.get("q", freq / 2.0) * 100))
+        raw_payload.extend(struct.pack("<Hiiii", tag, freq_100, gain_100, q_100, 0))
+
+    key = KEY_UI_BASE + slot
+    return build_race_packet(CMD_NVDM_WRITE, struct.pack("<H", key) + bytes(raw_payload))
+
+
 # ==============================================================================
 # Response Parsers
 # ==============================================================================

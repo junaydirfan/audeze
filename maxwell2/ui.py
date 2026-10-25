@@ -1,10 +1,9 @@
 """
-Immersive rich terminal UI components for Audeze Maxwell 2 CLI & TUI.
-Provides modern visual gauges, spectrum graphs, status badges, and interactive dashboard.
+Immersive Studio Grayscale / Monochrome terminal UI components for Audeze Maxwell 2.
+Designed with a sleek, minimalist, high-contrast aesthetic.
 """
 
 import sys
-import time
 from typing import Dict, Any, List, Optional
 
 try:
@@ -12,16 +11,14 @@ try:
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-    from rich.columns import Columns
     from rich.align import Align
     from rich import box
-    from rich.style import Style
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
 
 
-def create_console() -> "Console":
+def create_console() -> Optional["Console"]:
     if RICH_AVAILABLE:
         return Console()
     return None
@@ -29,41 +26,37 @@ def create_console() -> "Console":
 
 def render_banner() -> str:
     return (
-        "[bold cyan]   ___   __  ______  _______ ____ ____ [/bold cyan]\n"
-        "[bold cyan]  / _ | / / / / _  \\/ __/_ // __//_  / [/bold cyan]\n"
-        "[bold cyan] / __ |/ /_/ / // // _/  / // _/  / /_ [/bold cyan]\n"
-        "[bold cyan]/_/ |_|\\____/____/___/  /___/___//___/ [/bold cyan]\n"
-        "[dim]  M A X W E L L  2  •  L I N U X  C O N T R O L[/dim]"
+        "[bold white]    ___   __  ______  _______ ____ ____ [/bold white]\n"
+        "[bold white]   / _ | / / / / _  \\/ __/_ // __//_  / [/bold white]\n"
+        "[bold white]  / __ |/ /_/ / // // _/  / // _/  / /_ [/bold white]\n"
+        "[bold white] /_/ |_|\\____/____/___/  /___/___//___/ [/bold white]\n"
+        "[dim white]   M A X W E L L  2   •   L I N U X   C O N T R O L[/dim white]"
     )
 
 
-def render_battery_bar(percent: Optional[int], width: int = 16) -> str:
-    """Renders a colorful visual battery bar with color gradient based on percentage."""
+def render_battery_bar(percent: Optional[int], width: int = 18) -> str:
+    """Renders a sleek monochrome visual battery gauge."""
     if percent is None:
-        return "[dim red][ ???????????????? ] Disconnected[/dim red]"
+        return "[dim][ ?????????????????? ] Disconnected[/dim]"
 
     filled_len = int((percent / 100.0) * width)
     unfilled_len = width - filled_len
 
-    if percent >= 60:
-        color = "green"
+    if percent >= 50:
+        bar = "[bold white]" + "█" * filled_len + "[/]" + "[dim]░[/dim]" * unfilled_len
         state = "High"
-    elif percent >= 25:
-        color = "yellow"
+    elif percent >= 20:
+        bar = "[white]" + "█" * filled_len + "[/]" + "[dim]░[/dim]" * unfilled_len
         state = "Good"
-    elif percent >= 15:
-        color = "dark_orange"
-        state = "Low"
     else:
-        color = "red"
-        state = "CRITICAL"
+        bar = "[bold reverse white]" + "█" * filled_len + "[/]" + "[dim]░[/dim]" * unfilled_len
+        state = "LOW"
 
-    bar = f"[{color}]" + "█" * filled_len + "[/]" + "[dim]░[/dim]" * unfilled_len
-    return f"[bold {color}]{percent}%[/] [{bar}] [dim]({state})[/dim]"
+    return f"[bold white]{percent}%[/] [{bar}] [dim]({state})[/dim]"
 
 
-def render_slider_bar(value: int, max_val: int = 20, width: int = 20, left_label: str = "Game", right_label: str = "Chat") -> str:
-    """Renders a center-notched crossfader slider bar."""
+def render_slider_bar(value: int, max_val: int = 20, width: int = 22, left_label: str = "Game", right_label: str = "Chat") -> str:
+    """Renders a sleek center-notched monochrome crossfader."""
     ratio = max(0.0, min(1.0, value / float(max_val)))
     pos = int(ratio * width)
 
@@ -71,49 +64,53 @@ def render_slider_bar(value: int, max_val: int = 20, width: int = 20, left_label
     mid = width // 2
     for i in range(width + 1):
         if i == pos:
-            bar_chars.append("[bold cyan]◆[/bold cyan]")
+            bar_chars.append("[bold white]◆[/bold white]")
         elif i == mid:
-            bar_chars.append("[white]│[/white]")
+            bar_chars.append("[bold white]│[/bold white]")
         elif i < pos:
-            bar_chars.append("[cyan]━[/cyan]")
+            bar_chars.append("[white]━[/white]")
         else:
             bar_chars.append("[dim]─[/dim]")
 
     slider_str = "".join(bar_chars)
     left_pct = int((1.0 - ratio) * 100)
     right_pct = int(ratio * 100)
-    return f"[bold]{left_label}[/] {left_pct}% [{slider_str}] {right_pct}% [bold]{right_label}[/]"
+    return f"[bold white]{left_label}[/] {left_pct}% [{slider_str}] {right_pct}% [bold white]{right_label}[/]"
 
 
-def render_sidetone_bar(level: int, max_level: int = 31, enabled: bool = True, width: int = 15) -> str:
-    """Renders visual level meter for sidetone."""
+def render_sidetone_bar(level: int, max_level: int = 31, enabled: bool = True, width: int = 16) -> str:
+    """Renders monochrome sidetone volume bar."""
     if not enabled:
         return "[dim]● OFF (Muted)[/dim]"
     ratio = max(0.0, min(1.0, level / float(max_level)))
     filled = int(ratio * width)
     unfilled = width - filled
-    bar = "[bold green]" + "■" * filled + "[/]" + "[dim]░[/dim]" * unfilled
-    return f"[bold green]● ON[/] [{bar}] [bold]{level}[/][dim]/{max_level}[/dim]"
+    bar = "[bold white]" + "■" * filled + "[/]" + "[dim]░[/dim]" * unfilled
+    return f"[bold white]● ON[/] [{bar}] [bold white]{level}[/][dim]/{max_level}[/dim]"
 
 
-def render_eq_spectrum(bands: List[Dict[str, Any]], height: int = 9) -> Table:
+def render_eq_spectrum(bands: List[Dict[str, Any]], selected_band_idx: Optional[int] = None) -> Table:
     """
-    Renders an ASCII/Unicode graphic equalizer spectrum analyzer display.
+    Renders an ASCII/Unicode graphic equalizer spectrum analyzer in sleek studio monochrome.
     """
     table = Table(
         box=box.ROUNDED,
-        title="[bold cyan]10-BAND GRAPHIC EQUALIZER SPECTRUM[/bold cyan]",
+        title="[bold white]10-BAND GRAPHIC EQUALIZER SPECTRUM[/bold white]",
         title_justify="center",
-        border_style="cyan",
-        header_style="bold magenta",
+        border_style="white",
+        header_style="bold white",
     )
 
     table.add_column("Level", justify="right", style="dim", no_wrap=True, width=8)
     labels = ["32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
-    for lbl in labels:
-        table.add_column(lbl, justify="center", width=6)
 
-    # Gains range: +12 dB down to -12 dB in discrete steps
+    for i, lbl in enumerate(labels):
+        if selected_band_idx is not None and selected_band_idx == i:
+            header_str = f"[bold black on white] {lbl} [/]"
+        else:
+            header_str = lbl
+        table.add_column(header_str, justify="center", width=6)
+
     db_steps = [12.0, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0, -9.0, -12.0]
     gains = [b.get("gain_db", 0.0) for b in bands]
     while len(gains) < 10:
@@ -121,52 +118,55 @@ def render_eq_spectrum(bands: List[Dict[str, Any]], height: int = 9) -> Table:
 
     for db_level in db_steps:
         row = [f"{db_level:+2.0f}dB" if db_level != 0 else " 0dB"]
-        for g in gains:
+        for i, g in enumerate(gains):
+            is_selected = (selected_band_idx is not None and selected_band_idx == i)
             if db_level == 0.0:
                 if g == 0.0:
-                    row.append("[cyan]─┼─[/cyan]")
+                    symbol = "[bold white]─┼─[/bold white]" if is_selected else "[white]─┼─[/white]"
                 else:
-                    row.append("[bold cyan]│█│[/bold cyan]")
+                    symbol = "[bold white]│█│[/bold white]"
             elif db_level > 0:
                 if g >= db_level:
-                    row.append("[bold green] █ [/bold green]")
+                    symbol = "[bold white] █ [/bold white]" if is_selected else "[white] █ [/white]"
                 elif g >= db_level - 1.5:
-                    row.append("[green] ▄ [/green]")
+                    symbol = "[bold white] ▄ [/bold white]" if is_selected else "[dim white] ▄ [/dim white]"
                 else:
-                    row.append("[dim] · [/dim]")
-            else:  # db_level < 0
+                    symbol = "[dim] · [/dim]"
+            else:
                 if g <= db_level:
-                    row.append("[bold yellow] █ [/bold yellow]")
+                    symbol = "[bold white] █ [/bold white]" if is_selected else "[white] █ [/white]"
                 elif g <= db_level + 1.5:
-                    row.append("[yellow] ▀ [/yellow]")
+                    symbol = "[bold white] ▀ [/bold white]" if is_selected else "[dim white] ▀ [/dim white]"
                 else:
-                    row.append("[dim] · [/dim]")
+                    symbol = "[dim] · [/dim]"
+            row.append(symbol)
         table.add_row(*row)
 
-    # Add numeric gain values at bottom
     num_row = ["[bold white]Gain[/]"]
-    for g in gains:
-        color = "green" if g > 0 else ("yellow" if g < 0 else "dim")
-        num_row.append(f"[{color}]{g:+.1f}[/]")
+    for i, g in enumerate(gains):
+        if selected_band_idx is not None and selected_band_idx == i:
+            num_row.append(f"[bold black on white]{g:+4.1f}[/]")
+        else:
+            style = "bold white" if g != 0 else "dim"
+            num_row.append(f"[{style}]{g:+4.1f}[/]")
     table.add_row(*num_row)
 
     return table
 
 
 def print_rich_status(status: Dict[str, Any]):
-    """Renders the complete rich device dashboard view."""
+    """Renders the complete rich device dashboard view in sleek studio monochrome."""
     if not RICH_AVAILABLE:
-        # Fallback will be handled by caller
         return
 
     console = Console()
 
-    # Device header panel
     banner_text = render_banner()
+    console.print()
     console.print(Align.center(banner_text))
     console.print()
 
-    # Active preset badge
+    # Active preset badge (Clean inverted high-contrast pill)
     preset = status.get("preset", {})
     p_name = preset.get("name", "Unknown")
     p_idx = preset.get("index", 1)
@@ -174,28 +174,27 @@ def print_rich_status(status: Dict[str, Any]):
 
     if is_custom:
         slot_num = preset.get("slot", 0) + 1
-        preset_badge = f"[bold white on blue]  ▶ ACTIVE PRESET: [{p_idx}] {p_name.upper()} (CUSTOM {slot_num})  [/]"
+        preset_badge = f"[bold black on white]  ● ACTIVE PRESET: [{p_idx}] {p_name.upper()} (CUSTOM SLOT {slot_num})  [/]"
     else:
-        preset_badge = f"[bold white on magenta]  ▶ ACTIVE PRESET: [{p_idx}] {p_name.upper()}  [/]"
+        preset_badge = f"[bold black on white]  ● ACTIVE PRESET: [{p_idx}] {p_name.upper()}  [/]"
 
     console.print(Align.center(preset_badge))
     console.print()
 
-    # Main Status Table
-    status_table = Table(box=box.ROUNDED, expand=True, border_style="bright_blue")
-    status_table.add_column("Category", style="bold cyan", width=22)
-    status_table.add_column("Live Telemetry & Hardware Control", style="white")
+    status_table = Table(box=box.ROUNDED, expand=True, border_style="grey70")
+    status_table.add_column("Category", style="bold white", width=22)
+    status_table.add_column("Hardware Status & Value", style="white")
 
     # Battery
     batt = status.get("battery_percent")
-    status_table.add_row("Battery", render_battery_bar(batt))
+    status_table.add_row("Battery Gauge", render_battery_bar(batt))
 
     # Mic Mute
     mute = status.get("mic_muted")
     if mute is True:
-        mic_str = "[bold white on red] ● MUTED [/] [dim](Physical boom mic switch is muted)[/dim]"
+        mic_str = "[bold black on white] MUTED [/] [dim](Boom mic hardware switch is off)[/dim]"
     elif mute is False:
-        mic_str = "[bold white on green] ● LIVE / UNMUTED [/] [dim](Microphone active)[/dim]"
+        mic_str = "[bold white]● LIVE / UNMUTED[/] [dim](Microphone transmitting)[/dim]"
     else:
         mic_str = "[dim]Unknown[/dim]"
     status_table.add_row("Microphone", mic_str)
@@ -212,40 +211,38 @@ def print_rich_status(status: Dict[str, Any]):
 
     # Noise Reduction
     nr = status.get("noise_reduction", {}).get("name", "Unknown")
-    nr_colors = {"Off": "dim", "Low": "cyan", "High": "bold green"}
-    nr_color = nr_colors.get(nr, "white")
-    status_table.add_row("AI Noise Filter", f"[{nr_color}]● {nr}[/]")
+    status_table.add_row("AI Noise Reduction", f"[bold white]{nr}[/]")
 
     # Limiter
     lim = status.get("limiter", {}).get("enabled")
     if lim:
-        lim_str = "[bold green]Active (85 dB)[/] [dim](Hearing safety cap enabled)[/dim]"
+        lim_str = "[bold white]Active (85 dB)[/] [dim](Hearing safety cap enabled)[/dim]"
     else:
-        lim_str = "[yellow]Inactive[/] [dim](Full dynamic volume headroom)[/dim]"
+        lim_str = "[dim]Disabled (Full Dynamic Range)[/dim]"
     status_table.add_row("Volume Limiter", lim_str)
 
     # Firmware & Dongle Info
     fw = status.get("firmware", {}).get("firmware", "Unknown")
-    status_table.add_row("Device Info", f"[cyan]Audeze Maxwell 2 Xbox Dongle[/] • Firmware: [bold green]{fw}[/]")
+    status_table.add_row("Hardware Info", f"[white]Audeze Maxwell 2 (Xbox Dongle)[/] • Firmware: [bold white]{fw}[/]")
 
-    console.print(Panel(status_table, title="[bold white]HARDWARE TELEMETRY & CONTROLS[/bold white]", border_style="blue"))
+    console.print(Panel(status_table, title="[bold white]HARDWARE TELEMETRY & CONTROLS[/bold white]", border_style="white", box=box.ROUNDED))
     console.print()
 
 
 def print_rich_preset_success(preset: Dict[str, Any], backup_file: str, dry_run: bool = False):
-    """Renders a stylish toast panel when a preset changes."""
+    """Renders a stylish monochrome toast panel when a preset changes."""
     if not RICH_AVAILABLE:
         return
 
     console = Console()
     idx = preset.get("index", "?")
     name = preset.get("name", "Unknown")
-    dry = " [bold yellow](DRY-RUN - SIMULATED)[/]" if dry_run else ""
+    dry = " [bold dim](DRY-RUN - SIMULATED)[/]" if dry_run else ""
 
     text = Text()
-    text.append("✔ ", style="bold green")
-    text.append(f"Successfully activated preset [{idx}] ", style="bold white")
-    text.append(f"{name.upper()}{dry}\n", style="bold cyan")
+    text.append("✔ ", style="bold white")
+    text.append(f"Activated preset [{idx}] ", style="bold white")
+    text.append(f"{name.upper()}{dry}\n", style="bold underline")
     text.append(f"  Safety rollback snapshot saved to: {backup_file}", style="dim")
 
-    console.print(Panel(text, border_style="green", box=box.ROUNDED))
+    console.print(Panel(text, border_style="white", box=box.ROUNDED))

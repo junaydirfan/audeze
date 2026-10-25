@@ -13,6 +13,7 @@ from maxwell2.protocol import (
     build_read_control_command,
     build_write_control_command,
     build_read_ui_eq_command,
+    build_write_ui_eq_command,
     parse_preset_index,
     parse_battery_notification,
     parse_firmware_notification,
@@ -67,19 +68,49 @@ class MaxwellClient:
                 pass
         return None
 
-    def get_firmware(self) -> Dict[str, str]:
-        """Queries dongle and headset firmware versions."""
+    def get_firmware(self) -> Dict[str, Any]:
+        """Queries both dongle and headset firmware versions."""
         if self.transport.dry_run:
-            return {"firmware": "v1.0.1.74 (Simulated)"}
+            return {
+                "dongle": "v1.0.5.7.4 (Simulated)",
+                "headset": "v1.0.5.7.4 (Simulated)",
+                "match": True,
+                "firmware": "v1.0.5.7.4",
+            }
 
         packet = build_firmware_command()
-        notif = self.transport.query_notification(packet, timeout_sec=2.0)
-        if notif:
-            try:
-                return {"firmware": parse_firmware_notification(notif)}
-            except Exception:
-                pass
-        return {"firmware": "Unknown"}
+
+        # 1. Query Dongle firmware (route 0x00)
+        fw_dongle = "Unknown"
+        old_dongle_flag = self.transport.is_dongle
+        try:
+            self.transport.is_dongle = False  # Route 0x00
+            notif = self.transport.query_notification(packet, timeout_sec=1.2)
+            if notif:
+                fw_dongle = parse_firmware_notification(notif)
+        except Exception:
+            pass
+        finally:
+            self.transport.is_dongle = old_dongle_flag
+
+        # 2. Query Headset firmware (route 0x80)
+        fw_headset = "Unknown"
+        try:
+            notif = self.transport.query_notification(packet, timeout_sec=1.2)
+            if notif:
+                fw_headset = parse_firmware_notification(notif)
+        except Exception:
+            pass
+
+        primary_fw = fw_headset if fw_headset != "Unknown" else fw_dongle
+        is_match = (fw_dongle == fw_headset) if (fw_dongle != "Unknown" and fw_headset != "Unknown") else True
+
+        return {
+            "dongle": fw_dongle,
+            "headset": fw_headset,
+            "match": is_match,
+            "firmware": primary_fw,
+        }
 
     def get_mic_mute(self) -> Optional[bool]:
         """Reads hardware microphone mute switch state (True = muted, False = unmuted)."""
@@ -175,6 +206,36 @@ class MaxwellClient:
             return {"slot": slot, "preset_num": slot + 1, "bands": bands, "is_simulated": True}
 
         return parse_ui_eq_preset(resp, expected_slot=slot)
+
+    def write_custom_eq(self, slot: int, bands: List[Dict[str, Any]], activate: bool = True) -> Dict[str, Any]:
+        """
+        Writes a 10-band custom EQ profile to NVDM key 0xEF00 + slot (slot 0..3).
+        Takes a pre-write backup snapshot before sending the write.
+        Optionally activates the custom preset so the DSP reloads the new curve.
+        """
+        if not (0 <= slot <= 3):
+            raise ValueError(f"Custom EQ slot must be 0..3 (representing Presets 1..4), got {slot}")
+
+        # 1. Snapshot previous state
+        current = self.read_custom_eq(slot)
+        backup_path = create_backup(f"write_custom_eq_slot_{slot+1}", {"previous_eq": current, "target_bands": bands})
+
+        # 2. Build and send write command
+        cmd = build_write_ui_eq_command(slot, bands)
+        self.transport.write_race_packet(cmd)
+
+        if not self.transport.dry_run and activate:
+            # Re-select custom preset (Preset 7..10) so the DSP reloads the updated curve
+            preset_idx = 7 + slot
+            self.transport.write_race_packet(build_select_preset_command(preset_idx))
+
+        return {
+            "success": True,
+            "slot": slot,
+            "preset_num": slot + 1,
+            "backup_file": backup_path,
+            "dry_run": self.transport.dry_run,
+        }
 
     def dump_all(self) -> Dict[str, Any]:
         """Dumps all headset status and all 4 custom EQ profiles as a single JSON export."""
