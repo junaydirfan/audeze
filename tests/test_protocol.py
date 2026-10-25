@@ -185,6 +185,23 @@ class TestCommandBuildersAndParsers(unittest.TestCase):
         self.assertEqual(parsed["bands"][0]["gain_db"], 3.0)
         self.assertEqual(parsed["bands"][5]["frequency_hz"], 1000.0)
 
+    def test_write_ui_eq_builder(self):
+        from maxwell2.protocol import build_write_ui_eq_command, CMD_NVDM_WRITE
+        freqs = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+        bands = [{"frequency_hz": f, "gain_db": 2.5} for f in freqs]
+        packet = build_write_ui_eq_command(slot=0, bands=bands)
+
+        cmd, payload = parse_race_packet(packet, expected_dir=0x5A)
+        self.assertEqual(cmd, CMD_NVDM_WRITE)
+        # Payload starts with key (0xEF00) + 185 bytes data = 187 bytes
+        self.assertEqual(len(payload), 187)
+        self.assertEqual(struct.unpack_from("<H", payload, 0)[0], KEY_UI_BASE)
+
+        # Out-of-bounds gain test
+        bad_bands = copy_bands = [{"frequency_hz": f, "gain_db": 15.0} for f in freqs]
+        with self.assertRaises(ProtocolError):
+            build_write_ui_eq_command(slot=0, bands=bad_bands)
+
     def test_malformed_race_packets(self):
         # Bad sync byte
         with self.assertRaises(ProtocolError):
