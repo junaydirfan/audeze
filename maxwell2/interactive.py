@@ -117,7 +117,7 @@ class CursesTUI:
         """Initializes terminal colors and settings."""
         curses.curs_set(0)  # Hide cursor
         self.stdscr.keypad(True)
-        self.stdscr.timeout(1000)  # Non-blocking poll every 1s
+        self.stdscr.timeout(100)  # Non-blocking poll every 100ms for high responsiveness
 
         # Enable mouse events
         try:
@@ -638,35 +638,35 @@ class CursesTUI:
         """Toggles hardware sidetone on/off."""
         curr = self.status.get("sidetone", {}).get("enabled", False)
         new_val = not curr
+        self.status["sidetone"]["enabled"] = new_val
         try:
-            self.client.set_sidetone(enabled=new_val)
-            self.status["sidetone"]["enabled"] = new_val
+            self.client.set_sidetone_fast(enabled=new_val)
             self.message = f"Sidetone switched {'ON' if new_val else 'OFF'}."
         except Exception as e:
             self.message = f"Sidetone toggle failed: {e}"
 
     def step_sidetone(self, delta: int):
-        """Adjusts sidetone volume."""
+        """Adjusts sidetone volume smoothly (0..31)."""
         curr = self.status.get("sidetone", {}).get("level", 5)
         new_lvl = max(0, min(31, curr + delta))
+        self.status["sidetone"]["level"] = new_lvl
         try:
-            self.client.set_sidetone(level=new_lvl)
-            self.status["sidetone"]["level"] = new_lvl
+            self.client.set_sidetone_fast(level=new_lvl)
             self.message = f"Sidetone volume: {new_lvl}/31"
         except Exception as e:
             self.message = f"Sidetone volume failed: {e}"
 
     def step_chatmix(self, delta: int):
-        """Adjusts game/chat balance."""
+        """Adjusts game/chat balance smoothly (0..20)."""
         cm = self.status.get("chat_mix", {})
         raw = cm.get("raw", 10)
         new_raw = max(0, min(20, raw + delta))
+        chat_p = int((new_raw / 20.0) * 100)
+        self.status["chat_mix"]["raw"] = new_raw
+        self.status["chat_mix"]["chat_pct"] = chat_p
+        self.status["chat_mix"]["game_pct"] = 100 - chat_p
         try:
-            self.client.set_chat_mix(new_raw)
-            chat_p = int((new_raw / 20.0) * 100)
-            self.status["chat_mix"]["raw"] = new_raw
-            self.status["chat_mix"]["chat_pct"] = chat_p
-            self.status["chat_mix"]["game_pct"] = 100 - chat_p
+            self.client.set_chat_mix_fast(new_raw)
             self.message = f"Game/Chat Balance: {100 - chat_p}% Game / {chat_p}% Chat"
         except Exception as e:
             self.message = f"Chat mix failed: {e}"
@@ -676,11 +676,10 @@ class CursesTUI:
         modes = ["Off", "Low", "High"]
         curr = self.status.get("noise_reduction", {}).get("code", 1)
         new_code = (curr + direction) % 3
+        self.status["noise_reduction"]["code"] = new_code
+        self.status["noise_reduction"]["name"] = modes[new_code]
         try:
-            cmd = build_write_control_command(SUB_NOISE_REDUCTION, new_code)
-            self.client.transport.write_race_packet(cmd)
-            self.status["noise_reduction"]["code"] = new_code
-            self.status["noise_reduction"]["name"] = modes[new_code]
+            self.client.set_noise_reduction_fast(new_code)
             self.message = f"AI Noise Reduction set to {modes[new_code]}."
         except Exception as e:
             self.message = f"Noise reduction failed: {e}"

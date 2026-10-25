@@ -345,3 +345,25 @@ class MaxwellClient:
 
         updated = self.get_chat_mix()
         return {"success": True, "chat_mix": updated, "backup_file": backup_path}
+
+    # --------------------------------------------------------------------------
+    # Fast Low-Latency Control Writes (Interactive TUI Slider Mode)
+    # --------------------------------------------------------------------------
+
+    def set_sidetone_fast(self, enabled: Optional[bool] = None, level: Optional[int] = None):
+        """Low-latency hardware write for interactive TUI sidetone adjustments."""
+        if enabled is not None:
+            self.transport.write_control_fast(SUB_SIDETONE_ON, 1 if enabled else 0)
+        if level is not None:
+            lvl = max(0, min(31, int(level)))
+            self.transport.write_control_fast(SUB_SIDETONE_LEVEL, lvl)
+
+    def set_chat_mix_fast(self, value: int):
+        """Low-latency hardware write for interactive TUI Game/Chat slider."""
+        val = max(0, min(20, int(value)))
+        self.transport.write_control_fast(SUB_CHAT_MIX, val)
+
+    def set_noise_reduction_fast(self, code: int):
+        """Low-latency hardware write for interactive TUI AI noise reduction mode."""
+        c = max(0, min(2, int(code)))
+        self.transport.write_control_fast(SUB_NOISE_REDUCTION, c)

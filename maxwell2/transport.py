@@ -136,8 +136,10 @@ class Transport:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def drain(self, max_rounds: int = 10):
+    def drain(self, max_rounds: int = 5):
         """Drains stale input reports from both GET_REPORT and Interrupt IN buffers."""
+        self.input_stream.clear()
+        self.pending_notifications.clear()
         if self.dry_run or self.fd is None:
             return
 
@@ -154,7 +156,7 @@ class Transport:
                 pass
 
             # Check Interrupt IN if select indicates readiness
-            r, _, _ = select.select([self.fd], [], [], 0.005)
+            r, _, _ = select.select([self.fd], [], [], 0.002)
             if r:
                 try:
                     os.read(self.fd, 64)
@@ -166,9 +168,21 @@ class Transport:
                 empty_count = 0
             else:
                 empty_count += 1
-                if empty_count >= 3:
+                if empty_count >= 2:
                     break
-            time.sleep(0.01)
+            time.sleep(0.005)
+
+    def write_control_fast(self, subcommand: int, value: int):
+        """
+        Fast low-latency write for interactive sliders (sidetone, chatmix, noise reduction).
+        Transmits CMD_SETTING_WRITE and quickly drains the 0x5B ACK without blocking the UI.
+        """
+        from maxwell2.protocol import build_write_control_command
+        cmd = build_write_control_command(subcommand, value)
+        self.write_race_packet(cmd)
+        if not self.dry_run:
+            time.sleep(0.012)
+            self.poll_input_report()
 
     def write_race_packet(self, race_packet: bytes) -> List[bytes]:
         """

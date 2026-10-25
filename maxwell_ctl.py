@@ -151,6 +151,13 @@ def main():
     bk_show = bk_sub.add_parser("show", help="Display details of a backup file")
     bk_show.add_argument("file", help="Filename or path of backup")
 
+    # 8. firmware
+    fw_parser = subparsers.add_parser("firmware", help="Firmware diagnostics, parity verification, and package inspection")
+    fw_sub = fw_parser.add_subparsers(dest="firmware_action")
+    fw_sub.add_parser("status", help="Read dual dongle & headset firmware status, parity, and safety readiness")
+    fw_inspect = fw_sub.add_parser("inspect", help="Offline inspection and validation of a firmware .bin package")
+    fw_inspect.add_argument("file", help="Path to firmware .bin file to inspect")
+
     args = parser.parse_args()
 
     # Handle offline commands first (backups, eq list)
@@ -183,6 +190,15 @@ def main():
             data = load_backup(args.file)
             print(json.dumps(data, indent=2))
             return
+
+    if args.command == "firmware" and args.firmware_action == "inspect":
+        from maxwell2.firmware import inspect_firmware_package, format_firmware_inspect_plain
+        info = inspect_firmware_package(args.file)
+        if args.json:
+            print(json.dumps(info, indent=2))
+        else:
+            print(format_firmware_inspect_plain(info))
+        return
 
     # Initialize transport and client
     try:
@@ -265,6 +281,14 @@ def main():
                     print(f"[+] Complete configuration dumped to {args.out}")
                 else:
                     print(json.dumps(full_dump, indent=2))
+
+            elif args.command == "firmware":
+                from maxwell2.firmware import get_firmware_diagnostics, format_firmware_status_plain
+                diag = get_firmware_diagnostics(client)
+                if args.json:
+                    print(json.dumps(diag, indent=2))
+                else:
+                    print(format_firmware_status_plain(diag))
 
     except DeviceNotFoundError as e:
         print(f"[-] {e}")

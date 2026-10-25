@@ -237,6 +237,26 @@ class TestCommandBuildersAndParsers(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             build_write_control_command(SUB_MIC_MUTE, 1)
 
+    def test_input_stream_self_healing(self):
+        """Verifies that InputStream auto-recovers when leading garbage/zeros appear."""
+        stream = InputStream()
+
+        # Valid packet: 05 5A 04 00 01 09 00 00
+        valid_packet = bytes.fromhex("05 5A 04 00 01 09 00 00")
+
+        # Report with leading zeroes/garbage before the valid RACE packet
+        corrupted_chunk = b"\x00\x00\x00\xFF" + valid_packet
+        report = bytes([0x07, len(corrupted_chunk), 0x80]) + corrupted_chunk
+        report += b"\x00" * (62 - len(report))
+
+        packets = stream.feed(report)
+        self.assertEqual(len(packets), 1)
+        self.assertEqual(packets[0], valid_packet)
+
+        # Clear buffer test
+        stream.clear()
+        self.assertEqual(len(stream.buffer), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

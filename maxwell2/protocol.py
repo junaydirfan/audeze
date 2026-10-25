@@ -133,12 +133,18 @@ class InputStream:
     def __init__(self):
         self.buffer = bytearray()
 
+    def clear(self):
+        """Clears the internal reassembly buffer."""
+        self.buffer.clear()
+
     def feed(self, report: bytes) -> List[bytes]:
         """Feeds a raw 62-byte input report and returns any fully reassembled RACE packets."""
         if len(report) < 3 or report[0] != REPORT_ID_INPUT:
             raise ProtocolError(f"Invalid input report ID: 0x{report[0]:02X}")
 
         chunk_len = report[1]
+        if chunk_len == 0:
+            return []
         if chunk_len > CHUNK_MAX or len(report) < 3 + chunk_len:
             raise ProtocolError(f"Invalid chunk length {chunk_len} in input report")
 
@@ -148,7 +154,16 @@ class InputStream:
         packets = []
         while len(self.buffer) >= 6:
             if self.buffer[0] != SYNC_BYTE:
-                raise ProtocolError(f"RACE sync lost at stream byte 0x{self.buffer[0]:02X}")
+                # Self-healing stream: search forward for next SYNC_BYTE (0x05)
+                sync_pos = self.buffer.find(bytes([SYNC_BYTE]))
+                if sync_pos == -1:
+                    self.buffer.clear()
+                    break
+                else:
+                    del self.buffer[:sync_pos]
+                    if len(self.buffer) < 6:
+                        break
+
             length = struct.unpack_from("<H", self.buffer, 2)[0]
             total_size = length + 4
             if len(self.buffer) < total_size:
