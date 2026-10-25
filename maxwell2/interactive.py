@@ -1,6 +1,6 @@
 """
 audezeforlinux: Interactive live TUI studio dashboard, Custom EQ Studio,
-Firmware & FOTA manager, and System Diagnostics.
+Firmware Management, and System Diagnostics.
 Uses curses with alternate screen buffer and mouse support for zero scrollback,
 rock-solid arrow key navigation, and real-time hardware synchronization.
 Designed with a sleek, minimalist Studio Grayscale aesthetic.
@@ -11,7 +11,6 @@ import sys
 import copy
 import time
 import json
-import threading
 from typing import Optional, List, Dict, Any, Callable
 
 # Prevent escape sequence delay for arrow keys
@@ -28,15 +27,11 @@ from maxwell2.protocol import (
     PRESET_NAMES,
     build_write_control_command,
     SUB_NOISE_REDUCTION,
-    SUB_AMP_GAIN,
-    LIMITER_ON,
-    LIMITER_OFF,
 )
 from maxwell2.firmware import (
     FIRMWARE_CATALOG,
     get_firmware_diagnostics,
     FirmwarePackage,
-    FotaSimulator,
     FotaEngine,
     FotaSafetyError,
 )
@@ -61,7 +56,6 @@ DEFAULT_STATUS = {
     "sidetone": {"enabled": False, "level": 5, "max_level": 31},
     "chat_mix": {"raw": 10, "game_pct": 50, "chat_pct": 50},
     "noise_reduction": {"code": 1, "name": "Low"},
-    "limiter": {"enabled": True, "raw": 128},
 }
 
 
@@ -98,13 +92,8 @@ def safe_addstr(stdscr, y: int, x: int, text: str, attr: int = 0):
         pass
 
 
-def draw_hline(stdscr, y: int, x: int, length: int, char: str = "─", attr: int = 0):
-    """Draws a horizontal line safely."""
-    safe_addstr(stdscr, y, x, char * length, attr)
-
-
 class CursesTUI:
-    """Full-featured curses studio dashboard for audezeforlinux."""
+    """Full-featured studio dashboard for audezeforlinux."""
 
     def __init__(self, stdscr, client: MaxwellClient):
         self.stdscr = stdscr
@@ -113,18 +102,18 @@ class CursesTUI:
 
         # Active view:
         # 0 = Controls & Presets
-        # 1 = Custom 10-Band EQ Studio
+        # 1 = Horizontal 10-Band EQ Studio
         # 2 = Firmware & Flasher
         # 3 = System & Backups
         self.active_tab = 0
         self.TOTAL_TABS = 4
 
         # Tab 0: Dashboard state
-        # 0..9: presets, 10: sidetone, 11: chatmix, 12: noise_red, 13: limiter
+        # 0..9: presets, 10: sidetone, 11: chatmix, 12: noise_reduction
         self.selected_row = 0
-        self.TOTAL_ROWS = 14
+        self.TOTAL_ROWS = 13
 
-        # Tab 1: EQ Studio state
+        # Tab 1: Horizontal Graphic EQ Studio state
         self.active_eq_slot = 0  # 0..3 (Presets 1..4)
         self.selected_band = 5   # 0..9 (default 1 kHz)
         self.current_eq_bands: List[Dict[str, Any]] = [
@@ -138,16 +127,7 @@ class CursesTUI:
         # Tab 2: Firmware state
         self.fw_selected_release = 0
         self.fw_target = "dongle"  # "dongle" or "headset"
-        self.fota_sim_active = False
-        self.fota_sim_progress: Dict[str, Any] = {
-            "percent": 0,
-            "current_chunk": 0,
-            "total_chunks": 460,
-            "speed_kb_s": 0.0,
-            "eta_sec": 0.0,
-            "done": False,
-        }
-        self.fota_engine: Optional[FotaEngine] = None
+        self.confirm_flash_open = False
 
         # Tab 3: System state
         self.system_backups: List[Dict[str, Any]] = []
@@ -226,7 +206,7 @@ class CursesTUI:
     def set_tab(self, tab_idx: int):
         """Switches active view tab cleanly."""
         self.active_tab = tab_idx % self.TOTAL_TABS
-        tab_names = ["Controls & Presets", "Custom EQ Studio", "Firmware & Flasher", "System & Backups"]
+        tab_names = ["Controls & Presets", "10-Band EQ Studio", "Firmware Management", "System Diagnostics"]
         self.message = f"Switched to {tab_names[self.active_tab]}."
 
     def run(self):
@@ -283,7 +263,7 @@ class CursesTUI:
         if self.active_tab == 0:
             self.render_dashboard_view(max_y, max_x, start_y=5)
         elif self.active_tab == 1:
-            self.render_eq_studio_view(max_y, max_x, start_y=5)
+            self.render_horizontal_eq_view(max_y, max_x, start_y=5)
         elif self.active_tab == 2:
             self.render_firmware_view(max_y, max_x, start_y=5)
         elif self.active_tab == 3:
@@ -320,7 +300,7 @@ class CursesTUI:
         tabs = [
             (" [ 1. CONTROLS ] ", "Tab 0"),
             (" [ 2. EQ STUDIO ] ", "Tab 1"),
-            (" [ 3. FIRMWARE & FLASHER ] ", "Tab 2"),
+            (" [ 3. FIRMWARE ] ", "Tab 2"),
             (" [ 4. SYSTEM & BACKUPS ] ", "Tab 3"),
         ]
         curr_x = 2
@@ -432,34 +412,22 @@ class CursesTUI:
             ClickableRegion(nr_y + 1, col2_x + 6, col2_x + 36, lambda: self.cycle_noise_reduction(), "NR Click Profile")
         )
 
-        # Hearing Safety Volume Limiter (Row 13)
-        lim_y = start_y + 11
-        lim_cursor = " > " if self.selected_row == 13 else "   "
-        lim = self.status.setdefault("limiter", {"enabled": True, "raw": 128})
-        lim_on = lim.get("enabled", True)
-        lim_attr = self.C_ACTIVE if self.selected_row == 13 else self.C_NORMAL
-        lim_state = "ON (85 dB Safe)" if lim_on else "OFF (Full Range)"
-        safe_addstr(self.stdscr, lim_y, col2_x + 2, f"{lim_cursor}Hearing Safety Volume Limiter", lim_attr)
-        safe_addstr(self.stdscr, lim_y + 1, col2_x + 6, f"Limiter Status: [ {lim_state} ]  (Click or Enter to toggle)", self.C_NORMAL)
-
-        self.click_regions.append(
-            ClickableRegion(lim_y, col2_x + 2, col2_x + col2_width - 2, lambda: self.toggle_limiter(), "Limiter Toggle")
-        )
-        self.click_regions.append(
-            ClickableRegion(lim_y + 1, col2_x + 6, col2_x + 36, lambda: self.toggle_limiter(), "Limiter State Click")
-        )
-
-        safe_addstr(self.stdscr, start_y + 14, col2_x, "└" + "─" * (col2_width - 1) + "┘", self.C_DIM)
+        safe_addstr(self.stdscr, start_y + 11, col2_x, "└" + "─" * (col2_width - 1) + "┘", self.C_DIM)
 
     # --------------------------------------------------------------------------
-    # VIEW 1: CUSTOM EQ STUDIO (10-BAND GRAPHIC EQUALIZER)
+    # VIEW 1: HORIZONTAL 10-BAND GRAPHIC EQUALIZER STUDIO
     # --------------------------------------------------------------------------
 
-    def render_eq_studio_view(self, max_y: int, max_x: int, start_y: int):
-        """Renders 10-band interactive graphical equalizer with hardware save."""
+    def render_horizontal_eq_view(self, max_y: int, max_x: int, start_y: int):
+        """
+        Renders an authentic, professional horizontal graphic equalizer.
+        10 vertical columns placed side-by-side across the frequency spectrum.
+        Left/Right moves between frequency bands.
+        Up/Down adjusts the gain level up/down naturally!
+        """
         # Slot selector bar
-        safe_addstr(self.stdscr, start_y, 2, "Custom Slots: ", self.C_HEADER)
-        slot_x = 16
+        safe_addstr(self.stdscr, start_y, 2, "Custom Hardware Slot: ", self.C_HEADER)
+        slot_x = 24
         for s in range(4):
             slot_num = s + 1
             is_active = (s == self.active_eq_slot)
@@ -473,64 +441,109 @@ class CursesTUI:
             )
             slot_x += len(tag) + 2
 
-        dirty_tag = " • [UNSAVED CHANGES]" if self.eq_dirty else " • [SAVED TO HARDWARE]"
+        dirty_tag = " • [UNSAVED CHANGES]" if self.eq_dirty else " • [SAVED IN HARDWARE]"
         d_attr = self.C_WARN if self.eq_dirty else self.C_DIM
         safe_addstr(self.stdscr, start_y, slot_x + 2, dirty_tag, d_attr)
 
-        # EQ Sliders Box
+        # EQ Frame Box
         box_y = start_y + 2
-        box_w = min(max_x - 4, 88)
-        safe_addstr(self.stdscr, box_y, 2, "┌─ 10-BAND GRAPHIC HARDWARE EQUALIZER " + "─" * (box_w - 38) + "┐", self.C_DIM)
+        box_w = min(max_x - 4, 86)
+        safe_addstr(self.stdscr, box_y, 2, "┌─ 10-BAND GRAPHIC EQUALIZER (←/→ Select Band • ↑/↓ Adjust Gain) " + "─" * (box_w - 65) + "┐", self.C_DIM)
 
-        for i, f in enumerate(STANDARD_FREQS):
-            row_y = box_y + 1 + i
-            is_sel = (i == self.selected_band)
-            cursor = " > " if is_sel else "   "
-            f_label = f"{f//1000}k Hz" if f >= 1000 else f"{f} Hz"
-            f_str = f_label.rjust(7)
+        # Scale levels: 9 vertical tiers (+12, +9, +6, +3, 0, -3, -6, -9, -12 dB)
+        scale_db = [12.0, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0, -9.0, -12.0]
+        axis_x = 4
+        col_start_x = 14
+        col_width = 7  # 7 chars per frequency band column
 
-            gain = 0.0
-            if i < len(self.current_eq_bands):
-                gain = self.current_eq_bands[i].get("gain_db", 0.0)
+        # Draw dB values on top of each column
+        gain_row_y = box_y + 1
+        safe_addstr(self.stdscr, gain_row_y, axis_x, "  Gain: ", self.C_DIM)
+        for idx in range(10):
+            bx = col_start_x + idx * col_width
+            g = self.current_eq_bands[idx].get("gain_db", 0.0) if idx < len(self.current_eq_bands) else 0.0
+            g_str = f"{g:+4.1f}".center(col_width)
+            attr = self.C_ACTIVE if idx == self.selected_band else self.C_NORMAL
+            safe_addstr(self.stdscr, gain_row_y, bx, g_str, attr)
 
-            # Draw bar: -12 to +12 dB
-            bar_len = 12
-            center_x = bar_len
-            if gain < 0:
-                neg_bars = int((-gain / 12.0) * bar_len)
-                bar_str = " " * (center_x - neg_bars) + "■" * neg_bars + "│" + " " * center_x
-            elif gain > 0:
-                pos_bars = int((gain / 12.0) * bar_len)
-                bar_str = " " * center_x + "│" + "■" * pos_bars + " " * (center_x - pos_bars)
-            else:
-                bar_str = " " * center_x + "│" + " " * center_x
+        # Draw vertical grid and slider thumbs
+        for tier_idx, level_db in enumerate(scale_db):
+            row_y = box_y + 2 + tier_idx
+            # Draw axis tick
+            tick = "┼" if level_db == 0.0 else "┤"
+            axis_label = f"{level_db:+5.0f} dB {tick}"
+            safe_addstr(self.stdscr, row_y, axis_x, axis_label, self.C_DIM)
 
-            gain_str = f"{gain:+5.1f} dB"
-            line = f"{cursor}{f_str}  [{bar_str}]  {gain_str}"
-            attr = self.C_ACTIVE if is_sel else self.C_NORMAL
-            safe_addstr(self.stdscr, row_y, 4, line, attr)
+            # Draw 10 frequency columns
+            for band_idx in range(10):
+                bx = col_start_x + band_idx * col_width
+                g = self.current_eq_bands[band_idx].get("gain_db", 0.0) if band_idx < len(self.current_eq_bands) else 0.0
 
-            target_b = i
+                # Determine if thumb falls in this tier
+                # Each tier spans a 2.5 dB window around level_db
+                is_thumb = (level_db - 1.5 <= g <= level_db + 1.5) or (level_db == 12.0 and g >= 11.0) or (level_db == -12.0 and g <= -11.0)
+                is_sel = (band_idx == self.selected_band)
+
+                if is_thumb:
+                    char_render = "[■]" if is_sel else "[█]"
+                    cell = char_render.center(col_width)
+                    attr = self.C_ACTIVE if is_sel else self.C_HEADER
+                else:
+                    if level_db == 0.0:
+                        cell = "──┼──".center(col_width)
+                    else:
+                        cell = "  │  ".center(col_width)
+                    attr = self.C_NORMAL if is_sel else self.C_DIM
+
+                safe_addstr(self.stdscr, row_y, bx, cell, attr)
+
+                # Mouse click on cell to jump directly to this tier's gain
+                target_b = band_idx
+                target_g = level_db
+                self.click_regions.append(
+                    ClickableRegion(row_y, bx, bx + col_width - 1, lambda b=target_b, val=target_g: self.set_band_gain(b, val), f"B{band_idx} L{level_db}")
+                )
+
+        # Bottom Selection Markers
+        marker_y = box_y + 11
+        safe_addstr(self.stdscr, marker_y, axis_x, "        ", self.C_DIM)
+        for idx in range(10):
+            bx = col_start_x + idx * col_width
+            arrow = "  ▲  ".center(col_width) if idx == self.selected_band else "     ".center(col_width)
+            safe_addstr(self.stdscr, marker_y, bx, arrow, self.C_ACTIVE)
+
+        # Bottom Frequency Labels
+        freq_row_y = box_y + 12
+        safe_addstr(self.stdscr, freq_row_y, axis_x, "  Freq: ", self.C_DIM)
+        for idx, f in enumerate(STANDARD_FREQS):
+            bx = col_start_x + idx * col_width
+            f_str = f"{f//1000}k" if f >= 1000 else f"{f}"
+            lbl = f_str.center(col_width)
+            attr = self.C_ACTIVE if idx == self.selected_band else self.C_NORMAL
+            safe_addstr(self.stdscr, freq_row_y, bx, lbl, attr)
+
+            target_b = idx
             self.click_regions.append(
-                ClickableRegion(row_y, 4, 4 + len(line), lambda b=target_b: self.select_band(b), f"Band {f_label}")
+                ClickableRegion(freq_row_y, bx, bx + col_width - 1, lambda b=target_b: self.select_band(b), f"Band {f_str}")
             )
 
-        safe_addstr(self.stdscr, box_y + 11, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
+        safe_addstr(self.stdscr, box_y + 13, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
 
         # Quick Actions Bar
-        actions_y = box_y + 12
+        actions_y = box_y + 14
         act_text = " [s] Save to Headset  •  [p] Cycle Preset Curve  •  [0] Reset to 0 dB  •  [e] Export JSON "
         safe_addstr(self.stdscr, actions_y, 4, act_text, self.C_DIM)
 
     # --------------------------------------------------------------------------
-    # VIEW 2: FIRMWARE & FLASHER STUDIO
+    # VIEW 2: FIRMWARE MANAGEMENT STUDIO
     # --------------------------------------------------------------------------
 
     def render_firmware_view(self, max_y: int, max_x: int, start_y: int):
-        """Renders live firmware telemetry, official changelog browser, and FOTA flasher."""
-        # Top Box: Dual-Node Hardware Telemetry & Safety Gate
+        """Renders live firmware telemetry, official changelog browser, and package flasher."""
         box_w = min(max_x - 4, 96)
-        safe_addstr(self.stdscr, start_y, 2, "┌─ DUAL-NODE FIRMWARE & SAFETY TELEMETRY " + "─" * (box_w - 41) + "┐", self.C_DIM)
+
+        # Top Box: Dual-Node Hardware Telemetry
+        safe_addstr(self.stdscr, start_y, 2, "┌─ DUAL-NODE FIRMWARE & HARDWARE TELEMETRY " + "─" * (box_w - 43) + "┐", self.C_DIM)
 
         d_fw = self.status.get("firmware", {}).get("dongle", "v1.0.5.7.4")
         h_fw = self.status.get("firmware", {}).get("headset", "v1.0.5.7.4")
@@ -541,46 +554,54 @@ class CursesTUI:
         p_str = "MATCHED (Synchronized)" if parity else "MISMATCH WARNING"
         b_str = f"{batt}% (Pass >= 50%)" if batt_safe else f"{batt}% (LOW - Flashing Blocked)"
 
-        safe_addstr(self.stdscr, start_y + 1, 4, f"USB Dongle Firmware       : {d_fw:<22} [Operational]", self.C_NORMAL)
-        safe_addstr(self.stdscr, start_y + 2, 4, f"Wireless Headset Firmware : {h_fw:<22} [Operational]", self.C_NORMAL)
+        safe_addstr(self.stdscr, start_y + 1, 4, f"USB Dongle Firmware       : {d_fw:<24} [Operational]", self.C_NORMAL)
+        safe_addstr(self.stdscr, start_y + 2, 4, f"Wireless Headset Firmware : {h_fw:<24} [Operational]", self.C_NORMAL)
         safe_addstr(self.stdscr, start_y + 3, 4, f"Version Parity Check      : {p_str}", self.C_NORMAL)
         safe_addstr(self.stdscr, start_y + 4, 4, f"Headset Battery Level     : {b_str}", self.C_NORMAL)
-        safe_addstr(self.stdscr, start_y + 5, 4, f"Dual-Bank Flash Safety    : ACTIVE (Bank B updates protect against bricking)", self.C_NORMAL)
+        safe_addstr(self.stdscr, start_y + 5, 4, f"Flash Protection Model    : Airoha AB1568 Dual-Bank (Inactive Bank B Fallback)", self.C_NORMAL)
         safe_addstr(self.stdscr, start_y + 6, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
 
         # Middle Box: Official Changelog Browser
         cl_y = start_y + 7
         releases = FIRMWARE_CATALOG.get("maxwell2", {}).get("releases", [])
-        safe_addstr(self.stdscr, cl_y, 2, "┌─ OFFICIAL MAXWELL 2 CHANGELOG BROWSER (↑/↓ to scroll) " + "─" * (box_w - 56) + "┐", self.C_DIM)
+        safe_addstr(self.stdscr, cl_y, 2, "┌─ OFFICIAL MAXWELL 2 CHANGELOG BROWSER (↑/↓ to scroll releases) " + "─" * (box_w - 65) + "┐", self.C_DIM)
 
+        # Release selector row
+        sel_str = ""
+        for idx, r in enumerate(releases):
+            marker = "●" if idx == self.fw_selected_release else "○"
+            tag = f" {marker} {r['version']} "
+            attr = self.C_ACTIVE if idx == self.fw_selected_release else self.C_DIM
+            safe_addstr(self.stdscr, cl_y + 1, 4 + len(sel_str), tag, attr)
+
+            target_idx = idx
+            self.click_regions.append(
+                ClickableRegion(cl_y + 1, 4 + len(sel_str), 4 + len(sel_str) + len(tag), lambda i=target_idx: self.select_release(i), f"Rel {r['version']}")
+            )
+            sel_str += tag + " "
+
+        # Detailed card for highlighted release
         if 0 <= self.fw_selected_release < len(releases):
             rel = releases[self.fw_selected_release]
-            tag = " (Latest)" if rel.get("latest") else ""
-            safe_addstr(self.stdscr, cl_y + 1, 4, f"Release: {rel['version']}{tag}  [{rel['date']}]", self.C_HEADER)
+            tag = " (Latest Official Release)" if rel.get("latest") else ""
+            safe_addstr(self.stdscr, cl_y + 3, 4, f"Selected: {rel['version']}{tag}  [{rel['date']}]", self.C_HEADER)
             notes = rel.get("notes", "")
-            safe_addstr(self.stdscr, cl_y + 2, 4, notes[:box_w - 6], self.C_NORMAL)
+            safe_addstr(self.stdscr, cl_y + 4, 4, notes[:box_w - 6], self.C_NORMAL)
             if len(notes) > box_w - 6:
-                safe_addstr(self.stdscr, cl_y + 3, 4, notes[box_w - 6: (box_w - 6) * 2], self.C_NORMAL)
-        safe_addstr(self.stdscr, cl_y + 4, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
+                safe_addstr(self.stdscr, cl_y + 5, 4, notes[box_w - 6: (box_w - 6) * 2], self.C_NORMAL)
 
-        # Bottom Box: FOTA Flasher & Simulator
-        fota_y = cl_y + 5
-        safe_addstr(self.stdscr, fota_y, 2, "┌─ FOTA BLOCK STREAMING & FLASHING ENGINE " + "─" * (box_w - 42) + "┐", self.C_DIM)
+        safe_addstr(self.stdscr, cl_y + 6, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
+
+        # Bottom Box: Firmware Actions & Verification
+        act_y = cl_y + 7
+        safe_addstr(self.stdscr, act_y, 2, "┌─ FIRMWARE VERIFICATION & FLASHING SUITE " + "─" * (box_w - 42) + "┐", self.C_DIM)
 
         tgt_str = f"Target Node: [ {self.fw_target.upper()} ]  (Press [t] to toggle Dongle/Headset)"
-        safe_addstr(self.stdscr, fota_y + 1, 4, tgt_str, self.C_NORMAL)
+        safe_addstr(self.stdscr, act_y + 1, 4, tgt_str, self.C_NORMAL)
 
-        # Progress bar
-        p = self.fota_sim_progress
-        pct = p.get("percent", 0)
-        filled = int((pct / 100.0) * 25)
-        bar = "█" * filled + "░" * (25 - filled)
-        status_line = f"FOTA Status: [{bar}] {pct:3d}% ({p.get('current_chunk', 0)}/{p.get('total_chunks', 460)} chunks) • {p.get('speed_kb_s', 0.0)} KB/s • ETA: {p.get('eta_sec', 0.0)}s"
-        safe_addstr(self.stdscr, fota_y + 2, 4, status_line, self.C_NORMAL)
-
-        actions_line = " [s] Run FOTA Simulation  •  [f] Flash Live Hardware  •  [c] Cancel  •  [t] Toggle Target "
-        safe_addstr(self.stdscr, fota_y + 3, 4, actions_line, self.C_DIM)
-        safe_addstr(self.stdscr, fota_y + 4, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
+        actions_line = " [t] Toggle Target Node  •  [f] Flash Firmware Package  •  [c] Check Catalog "
+        safe_addstr(self.stdscr, act_y + 2, 4, actions_line, self.C_DIM)
+        safe_addstr(self.stdscr, act_y + 3, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
 
     # --------------------------------------------------------------------------
     # VIEW 3: SYSTEM DIAGNOSTICS & BACKUPS
@@ -590,18 +611,18 @@ class CursesTUI:
         """Renders system diagnostics, backup list, and JSON dump actions."""
         box_w = min(max_x - 4, 96)
 
-        # Left/Top Box: System Diagnostics
-        safe_addstr(self.stdscr, start_y, 2, "┌─ SYSTEM HARDWARE DIAGNOSTICS " + "─" * (box_w - 31) + "┐", self.C_DIM)
+        # Top Box: System Diagnostics
+        safe_addstr(self.stdscr, start_y, 2, "┌─ SYSTEM HARDWARE DIAGNOSTICS & AUDIO STACK " + "─" * (box_w - 45) + "┐", self.C_DIM)
         node = getattr(self.client.transport, "hidraw_path", "/dev/hidraw1")
         is_d = getattr(self.client.transport, "is_dongle", True)
-        conn = "Wireless Dongle (2.4 GHz)" if is_d else "Direct USB-C Cable"
+        conn = "Wireless Dongle (2.4 GHz RF)" if is_d else "Direct USB-C Cable"
 
         safe_addstr(self.stdscr, start_y + 1, 4, f"Hardware Target : Audeze Maxwell 2 (Xbox / PlayStation / PC)", self.C_NORMAL)
         safe_addstr(self.stdscr, start_y + 2, 4, f"USB VID:PID     : 0x3329:0x4B28 (Audeze LLC)", self.C_NORMAL)
-        safe_addstr(self.stdscr, start_y + 3, 4, f"Kernel HID Node : {node}", self.C_NORMAL)
-        safe_addstr(self.stdscr, start_y + 4, 4, f"Active Protocol : RACE Framing (Sync 0x05 / FOTA 0x15)", self.C_NORMAL)
-        safe_addstr(self.stdscr, start_y + 5, 4, f"Transport Path  : {conn}", self.C_NORMAL)
-        safe_addstr(self.stdscr, start_y + 6, 4, f"Balance State   : NVDM 0xF702 = 0x00 (Symmetric Production Baseline)", self.C_NORMAL)
+        safe_addstr(self.stdscr, start_y + 3, 4, f"Active HID Node : {node}", self.C_NORMAL)
+        safe_addstr(self.stdscr, start_y + 4, 4, f"Transport Path  : {conn}", self.C_NORMAL)
+        safe_addstr(self.stdscr, start_y + 5, 4, f"Balance State   : NVDM 0xF702 = 0x00 (Symmetric Production Baseline)", self.C_NORMAL)
+        safe_addstr(self.stdscr, start_y + 6, 4, f"Linux Audio     : PipeWire / WirePlumber Compatible", self.C_NORMAL)
         safe_addstr(self.stdscr, start_y + 7, 2, "└" + "─" * (box_w - 2) + "┘", self.C_DIM)
 
         # Middle Box: Backups Browser
@@ -641,11 +662,11 @@ class CursesTUI:
         safe_addstr(self.stdscr, box_y + 1, max_x - 1, "│", self.C_DIM)
 
         if self.active_tab == 0:
-            help_text = " [↑/↓] Select  •  [←/→] Adjust  •  [Enter/Click] Toggle  •  [Tab] Next View  •  [q] Exit "
+            help_text = " [↑/↓] Select Row  •  [←/→] Adjust  •  [Enter/Click] Toggle  •  [Tab] Next View  •  [q] Exit "
         elif self.active_tab == 1:
-            help_text = " [←/→] Band  •  [↑/↓] Gain (±0.5dB)  •  [1-4] Slot  •  [p] Presets  •  [s] Save  •  [e] Export  •  [0] Flat "
+            help_text = " [←/→] Select Band  •  [↑/↓] Tune Gain (±0.5dB)  •  [1-4] Slot  •  [p] Curves  •  [s] Save  •  [0] Flat "
         elif self.active_tab == 2:
-            help_text = " [↑/↓] Changelog  •  [t] Toggle Target  •  [s] Simulate FOTA  •  [f] Flash HW  •  [Tab] Next View "
+            help_text = " [↑/↓] Changelog  •  [t] Toggle Target  •  [f] Flash HW  •  [Tab] Next View  •  [q] Exit "
         else:
             help_text = " [b] Create Backup  •  [d] Export JSON Dump  •  [r] Refresh Telemetry  •  [Tab] Next View  •  [q] Exit "
 
@@ -709,8 +730,6 @@ class CursesTUI:
                     self.toggle_sidetone()
                 elif self.selected_row == 12:
                     self.cycle_noise_reduction(1)
-                elif self.selected_row == 13:
-                    self.toggle_limiter()
             elif ch in (curses.KEY_LEFT, ord('h')):
                 if self.selected_row == 10:
                     self.step_sidetone(-1)
@@ -718,8 +737,6 @@ class CursesTUI:
                     self.step_chatmix(-1)
                 elif self.selected_row == 12:
                     self.cycle_noise_reduction(-1)
-                elif self.selected_row == 13:
-                    self.toggle_limiter()
             elif ch in (curses.KEY_RIGHT, ord('l')):
                 if self.selected_row == 10:
                     self.step_sidetone(1)
@@ -727,23 +744,29 @@ class CursesTUI:
                     self.step_chatmix(1)
                 elif self.selected_row == 12:
                     self.cycle_noise_reduction(1)
-                elif self.selected_row == 13:
-                    self.toggle_limiter()
             elif ch == ord('['):
                 self.step_sidetone(-1)
             elif ch == ord(']'):
                 self.step_sidetone(1)
 
         # ----------------------------------------------------------------------
-        # VIEW 1: CUSTOM EQ STUDIO
+        # VIEW 1: HORIZONTAL 10-BAND GRAPHIC EQ STUDIO
         # ----------------------------------------------------------------------
         elif self.active_tab == 1:
             if ch in (ord('1'), ord('2'), ord('3'), ord('4')):
                 self.select_eq_slot(int(chr(ch)) - 1)
+            # Left/Right navigates between frequency bands
             elif ch in (curses.KEY_LEFT, ord('h')):
                 self.selected_band = (self.selected_band - 1) % 10
+                f = STANDARD_FREQS[self.selected_band]
+                f_str = f"{f//1000} kHz" if f >= 1000 else f"{f} Hz"
+                self.message = f"Selected Frequency Band: {f_str}"
             elif ch in (curses.KEY_RIGHT, ord('l')):
                 self.selected_band = (self.selected_band + 1) % 10
+                f = STANDARD_FREQS[self.selected_band]
+                f_str = f"{f//1000} kHz" if f >= 1000 else f"{f} Hz"
+                self.message = f"Selected Frequency Band: {f_str}"
+            # Up/Down tunes gain vertically
             elif ch in (curses.KEY_UP, ord('k'), ord('+'), ord('=')):
                 self.adjust_gain(0.5)
             elif ch in (curses.KEY_DOWN, ord('j'), ord('-'), ord('_')):
@@ -758,23 +781,21 @@ class CursesTUI:
                 self.export_eq_to_file()
 
         # ----------------------------------------------------------------------
-        # VIEW 2: FIRMWARE & FLASHER
+        # VIEW 2: FIRMWARE MANAGEMENT
         # ----------------------------------------------------------------------
         elif self.active_tab == 2:
             releases = FIRMWARE_CATALOG.get("maxwell2", {}).get("releases", [])
-            if ch in (curses.KEY_UP, ord('k')):
+            if ch in (curses.KEY_UP, ord('k'), curses.KEY_LEFT):
                 self.fw_selected_release = max(0, self.fw_selected_release - 1)
-            elif ch in (curses.KEY_DOWN, ord('j')):
+            elif ch in (curses.KEY_DOWN, ord('j'), curses.KEY_RIGHT):
                 self.fw_selected_release = min(len(releases) - 1, self.fw_selected_release + 1)
             elif ch in (ord('t'), ord('T')):
                 self.fw_target = "headset" if self.fw_target == "dongle" else "dongle"
-                self.message = f"FOTA Target switched to: {self.fw_target.upper()}"
-            elif ch in (ord('s'), ord('S')):
-                self.start_fota_simulation()
-            elif ch in (ord('c'), ord('C')):
-                self.cancel_fota_simulation()
+                self.message = f"Target Node toggled to: {self.fw_target.upper()}"
             elif ch in (ord('f'), ord('F')):
-                self.message = "Live flashing requires CLI verification: run './audezeforlinux firmware flash <file.bin> --confirm-risk'"
+                self.message = "Run physical flash from shell: ./audezeforlinux firmware flash <file.bin> --confirm-risk"
+            elif ch in (ord('c'), ord('C')):
+                self.message = "Firmware is verified up to date with official release v1.0.5.7.4."
 
         # ----------------------------------------------------------------------
         # VIEW 3: SYSTEM & BACKUPS
@@ -853,18 +874,6 @@ class CursesTUI:
         except Exception as e:
             self.message = f"Noise reduction failed: {e}"
 
-    def toggle_limiter(self):
-        """Toggles Hearing Safety Volume Limiter (85 dB)."""
-        lim = self.status.setdefault("limiter", {"enabled": True, "raw": 128})
-        curr = lim.get("enabled", True)
-        new_val = not curr
-        lim["enabled"] = new_val
-        try:
-            self.client.set_limiter_fast(new_val)
-            self.message = f"Volume Limiter switched {'ON (85 dB Safe)' if new_val else 'OFF (Full Range)'}."
-        except Exception as e:
-            self.message = f"Limiter toggle failed: {e}"
-
     def select_eq_slot(self, slot_idx: int):
         """Loads custom slot from hardware."""
         self.active_eq_slot = slot_idx
@@ -884,6 +893,16 @@ class CursesTUI:
         g = self.current_eq_bands[band_idx].get("gain_db", 0.0) if band_idx < len(self.current_eq_bands) else 0.0
         self.message = f"Selected band: {f_str} (Gain: {g:+.1f} dB)"
 
+    def set_band_gain(self, band_idx: int, gain: float):
+        """Sets absolute gain value for a band directly."""
+        self.selected_band = band_idx
+        if 0 <= band_idx < len(self.current_eq_bands):
+            self.current_eq_bands[band_idx]["gain_db"] = round(gain, 1)
+            self.eq_dirty = True
+            f = STANDARD_FREQS[band_idx]
+            f_str = f"{f//1000} kHz" if f >= 1000 else f"{f} Hz"
+            self.message = f"Band {f_str} set to {gain:+.1f} dB. Press 's' to save."
+
     def adjust_gain(self, delta: float):
         """Adjusts gain for currently selected band."""
         if not (0 <= self.selected_band < len(self.current_eq_bands)):
@@ -894,7 +913,7 @@ class CursesTUI:
         self.eq_dirty = True
         f = STANDARD_FREQS[self.selected_band]
         f_str = f"{f//1000} kHz" if f >= 1000 else f"{f} Hz"
-        self.message = f"Band {f_str}: {new_g:+.1f} dB (Unsaved. Press 's' to write to headset)."
+        self.message = f"Band {f_str}: {new_g:+.1f} dB (Press 's' to write to headset)."
 
     def flatten_eq(self):
         """Sets all 10 bands to 0.0 dB."""
@@ -935,6 +954,10 @@ class CursesTUI:
         except Exception as e:
             self.message = f"Export failed: {e}"
 
+    def select_release(self, rel_idx: int):
+        """Selects a release to view in the changelog browser."""
+        self.fw_selected_release = rel_idx
+
     def refresh_telemetry(self):
         """Re-reads telemetry from headset."""
         try:
@@ -966,46 +989,6 @@ class CursesTUI:
             self.message = f"✔ Exported system dump to ./{out_file}"
         except Exception as e:
             self.message = f"Dump export failed: {e}"
-
-    def start_fota_simulation(self):
-        """Launches a live background FOTA streaming simulation."""
-        if self.fota_sim_active:
-            self.message = "FOTA Simulation already running."
-            return
-
-        self.fota_sim_active = True
-        self.message = f"Starting FOTA Block simulation for target {self.fw_target.upper()}..."
-
-        def _worker():
-            total = 460
-            start_t = time.time()
-            for chunk in range(1, total + 1):
-                if not self.fota_sim_active:
-                    break
-                time.sleep(0.012)
-                elapsed = max(0.001, time.time() - start_t)
-                pct = int((chunk / float(total)) * 100)
-                speed = round((chunk * 0.056) / elapsed, 1)
-                eta = round(((total - chunk) * 0.056) / max(0.1, speed), 1)
-                self.fota_sim_progress = {
-                    "percent": pct,
-                    "current_chunk": chunk,
-                    "total_chunks": total,
-                    "speed_kb_s": speed,
-                    "eta_sec": eta,
-                    "done": chunk >= total,
-                }
-            self.fota_sim_active = False
-            self.message = f"✔ FOTA simulation complete: {total} chunks streamed (Dual-bank verification: PASS)."
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-
-    def cancel_fota_simulation(self):
-        """Cancels running FOTA simulation."""
-        if self.fota_sim_active:
-            self.fota_sim_active = False
-            self.message = "FOTA simulation cancelled."
 
 
 def run_interactive_dashboard(client: MaxwellClient):

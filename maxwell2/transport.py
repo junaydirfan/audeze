@@ -48,6 +48,50 @@ class DevicePermissionError(Exception):
     pass
 
 
+def list_maxwell_devices() -> List[dict]:
+    """
+    Scans sysfs to locate all connected Audeze Maxwell hidraw nodes.
+    Returns list of dicts: [{"path": "/dev/hidrawX", "pid": pid, "is_dongle": bool, "model": str}]
+    """
+    found = []
+    pid_models = {
+        0x4B28: "Maxwell 2 (Xbox Dongle)",
+        0x4B29: "Maxwell 2 (PlayStation / PC Dongle)",
+        0x4B2A: "Maxwell 2 (Direct USB)",
+        0x4B18: "Maxwell 1 (Xbox Dongle)",
+        0x4B19: "Maxwell 1 (PlayStation Dongle)",
+        0x4B1A: "Maxwell 1 (PlayStation USB)",
+        0x4B1E: "Maxwell 1 (Xbox USB)",
+    }
+    for hidraw_dir in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
+        uevent_path = os.path.join(hidraw_dir, "device", "uevent")
+        if not os.path.exists(uevent_path):
+            continue
+        try:
+            with open(uevent_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            props = dict(line.split("=", 1) for line in content.splitlines() if "=" in line)
+            hid_id = props.get("HID_ID", "")
+            parts = hid_id.split(":")
+            if len(parts) >= 3:
+                vid = int(parts[1], 16)
+                pid = int(parts[2], 16)
+                if vid == AUDEZE_VID and pid in KNOWN_PIDS:
+                    node_name = os.path.basename(hidraw_dir)
+                    dev_path = f"/dev/{node_name}"
+                    is_dongle = pid in DONGLE_PIDS
+                    model = pid_models.get(pid, f"Audeze Device (PID 0x{pid:04X})")
+                    found.append({
+                        "path": dev_path,
+                        "pid": pid,
+                        "is_dongle": is_dongle,
+                        "model": model,
+                    })
+        except Exception:
+            continue
+    return found
+
+
 class Transport:
     """
     Handles bidirectional HID communication with the Audeze Maxwell over /dev/hidraw.
@@ -68,26 +112,10 @@ class Transport:
         Scans sysfs to locate the Audeze Maxwell hidraw node.
         Returns (hidraw_path, product_id, is_dongle).
         """
-        for hidraw_dir in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
-            uevent_path = os.path.join(hidraw_dir, "device", "uevent")
-            if not os.path.exists(uevent_path):
-                continue
-            try:
-                with open(uevent_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                props = dict(line.split("=", 1) for line in content.splitlines() if "=" in line)
-                hid_id = props.get("HID_ID", "")
-                parts = hid_id.split(":")
-                if len(parts) >= 3:
-                    vid = int(parts[1], 16)
-                    pid = int(parts[2], 16)
-                    if vid == AUDEZE_VID and pid in KNOWN_PIDS:
-                        node_name = os.path.basename(hidraw_dir)
-                        dev_path = f"/dev/{node_name}"
-                        is_dongle = pid in DONGLE_PIDS
-                        return dev_path, pid, is_dongle
-            except Exception:
-                continue
+        devices = list_maxwell_devices()
+        if devices:
+            d = devices[0]
+            return d["path"], d["pid"], d["is_dongle"]
 
         raise DeviceNotFoundError(
             "No compatible Audeze Maxwell device found on /sys/class/hidraw/.\n"

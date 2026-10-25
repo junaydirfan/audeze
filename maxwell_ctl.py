@@ -65,11 +65,6 @@ def format_plain_status(status: dict) -> str:
 
     nr = status.get("noise_reduction", {}).get("name", "Unknown")
     lines.append(f"  AI Noise Reduction : {nr}")
-
-    lim = status.get("limiter", {}).get("enabled")
-    lim_str = "Enabled (85 dB)" if lim else "Disabled"
-    lines.append(f"  Volume Limiter     : {lim_str}")
-
     lines.append("=" * 60)
     return "\n".join(lines)
 
@@ -144,18 +139,14 @@ def main():
     dump_parser = subparsers.add_parser("dump", help="Dump complete state and all 4 custom EQ slots as JSON")
     dump_parser.add_argument("--out", help="Save dump to specified JSON file")
 
-    # 7. limiter
-    lim_parser = subparsers.add_parser("limiter", help="Query or control hearing safety volume limiter (85 dB)")
-    lim_parser.add_argument("state", nargs="?", choices=["on", "off"], help="Enable or disable limiter")
-
-    # 8. backup
+    # 7. backup
     bk_parser = subparsers.add_parser("backup", help="Manage automated pre-write configuration backups")
     bk_sub = bk_parser.add_subparsers(dest="backup_action", required=True)
     bk_sub.add_parser("list", help="List all available backups")
     bk_show = bk_sub.add_parser("show", help="Display details of a backup file")
     bk_show.add_argument("file", help="Filename or path of backup")
 
-    # 9. firmware
+    # 8. firmware
     fw_parser = subparsers.add_parser("firmware", help="Firmware diagnostics, parity verification, and package inspection")
     fw_sub = fw_parser.add_subparsers(dest="firmware_action")
     fw_sub.add_parser("status", help="Read dual dongle & headset firmware status, parity, and safety readiness")
@@ -165,19 +156,43 @@ def main():
     fw_inspect.add_argument("file", help="Path to firmware .bin file to inspect")
     fw_unpack = fw_sub.add_parser("unpack", help="Decompress and extract firmware partitions to directory")
     fw_unpack.add_argument("file", help="Path to firmware .bin file to unpack")
-    fw_unpack.add_argument("--out", default="./extracted_firmware", help="Output directory")
-    fw_sim = fw_sub.add_parser("simulate", help="Simulate FOTA transmission parameters and chunk layout")
-    fw_sim.add_argument("file", help="Path to firmware .bin file to simulate")
-    fw_sim.add_argument("--target", choices=["dongle", "headset"], default="dongle", help="Target node")
     fw_flash = fw_sub.add_parser("flash", help="Stream firmware update to target node with dual-bank protection")
     fw_flash.add_argument("file", help="Path to firmware .bin file to flash")
     fw_flash.add_argument("--target", choices=["dongle", "headset"], default="dongle", help="Target node")
     fw_flash.add_argument("--confirm-risk", action="store_true", help="Explicit confirmation gate for real hardware flashing")
     fw_flash.add_argument("--dry-run", action="store_true", help="Simulate FOTA flash without transmitting live hardware writes")
 
+    # 9. system utilities (doctor, setup-udev, install-system)
+    subparsers.add_parser("doctor", help="Run comprehensive Linux audio environment and permissions diagnostics")
+    subparsers.add_parser("setup-udev", help="Install /etc/udev/rules.d rules for non-root hardware access")
+    subparsers.add_parser("install-system", help="Install desktop application entry and user PATH symlink to ~/.local/bin")
+
     args = parser.parse_args()
 
-    # Handle offline commands first (backups, eq list, firmware inspect/unpack/check/simulate)
+    # Handle system tools (doctor, setup-udev, install-system)
+    if args.command == "doctor":
+        from maxwell2.system import run_doctor, format_doctor_report
+        report = run_doctor()
+        if getattr(args, "json", False):
+            print(json.dumps(report, indent=2))
+        else:
+            print(format_doctor_report(report))
+        return
+
+    if args.command == "setup-udev":
+        from maxwell2.system import setup_udev
+        ok, msg = setup_udev()
+        print(msg)
+        return
+
+    if args.command == "install-system":
+        from maxwell2.system import install_desktop_integration
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        ok, msg = install_desktop_integration(repo_dir)
+        print(msg)
+        return
+
+    # Handle offline commands first (backups, eq list, firmware inspect/unpack/check)
     if args.command == "eq" and args.eq_action == "list":
         if args.json:
             print(json.dumps([{"index": i, "name": n} for i, n in enumerate(PRESET_NAMES, 1)], indent=2))
@@ -227,27 +242,6 @@ def main():
             print(f"[+] Decompressed and extracted {len(out_files)} partitions to {args.out}:")
             for f in out_files:
                 print(f"  - {f} ({os.path.getsize(f)} bytes)")
-            return
-
-        elif args.firmware_action == "simulate":
-            from maxwell2.firmware import FirmwarePackage, FotaSimulator
-            pkg = FirmwarePackage(args.file)
-            sim = FotaSimulator(pkg, target=args.target)
-            res = sim.simulate_transfer()
-            if args.json:
-                print(json.dumps(res, indent=2))
-            else:
-                print("\n┌─ FOTA TRANSMISSION SIMULATION ───────────────────────────────────────┐")
-                print(f"│  Target Node               : {res['target'].upper():<38} │")
-                print(f"│  Routing Byte              : {res['route_byte']:<38} │")
-                print(f"│  Target Chip               : {res['chip_target']:<38} │")
-                print(f"│  Package Version           : {res['firmware_version']:<38} │")
-                print(f"│  Total Size                : {res['total_bytes']} bytes ({res['total_hid_reports']} reports)                  │")
-                print(f"│  Estimated Transfer Time   : ~{res['estimated_duration_sec']} seconds                              │")
-                print(f"│  Handshake Init Command    : {res['handshake_init']:<38} │")
-                print(f"│  FotaStart Opcode          : {res['fota_start_opcode']:<38} │")
-                print(f"│  Dual-Bank Recovery Mode   : ACTIVE (Reverts to stable bank on failure) │")
-                print("└──────────────────────────────────────────────────────────────────────┘\n")
             return
 
         elif args.firmware_action == "check":
@@ -384,18 +378,6 @@ def main():
                     print(f"[+] Complete configuration dumped to {args.out}")
                 else:
                     print(json.dumps(full_dump, indent=2))
-
-            elif args.command == "limiter":
-                if args.state is None:
-                    lim = client.get_limiter()
-                    state_str = "ON (85 dB Safe)" if lim["enabled"] else "OFF (Full Range)"
-                    print(f"Hearing Safety Volume Limiter: {state_str}")
-                elif args.state == "on":
-                    client.set_limiter(True)
-                    print("[+] Hearing Safety Volume Limiter enabled (85 dB safe limit).")
-                elif args.state == "off":
-                    client.set_limiter(False)
-                    print("[+] Volume Limiter disabled (Full dynamic range).")
 
             elif args.command == "firmware":
                 from maxwell2.firmware import get_firmware_diagnostics, format_firmware_status_plain

@@ -213,14 +213,6 @@ def print_rich_status(status: Dict[str, Any]):
     nr = status.get("noise_reduction", {}).get("name", "Unknown")
     status_table.add_row("AI Noise Reduction", f"[bold white]{nr}[/]")
 
-    # Limiter
-    lim = status.get("limiter", {}).get("enabled")
-    if lim:
-        lim_str = "[bold white]Active (85 dB)[/] [dim](Hearing safety cap enabled)[/dim]"
-    else:
-        lim_str = "[dim]Disabled (Full Dynamic Range)[/dim]"
-    status_table.add_row("Volume Limiter", lim_str)
-
     # Firmware & Dongle Info
     fw = status.get("firmware", {}).get("firmware", "Unknown")
     status_table.add_row("Hardware Info", f"[white]Audeze Maxwell 2 (Xbox Dongle)[/] • Firmware: [bold white]{fw}[/]")

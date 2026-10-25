@@ -22,14 +22,11 @@ from maxwell2.protocol import (
     parse_ui_eq_preset,
     SUB_MIC_MUTE,
     SUB_NOISE_REDUCTION,
-    SUB_AMP_GAIN,
     SUB_SIDETONE_LEVEL,
     SUB_MAX_SIDETONE,
     SUB_SIDETONE_ON,
     SUB_CHAT_MIX,
     PRESET_NAMES,
-    LIMITER_ON,
-    LIMITER_OFF,
     ProtocolError,
 )
 from maxwell2.transport import Transport
@@ -167,28 +164,6 @@ class MaxwellClient:
         names = {0: "Off", 1: "Low", 2: "High"}
         return {"code": code, "name": names.get(code, f"Unknown ({code})")}
 
-    def get_limiter(self) -> Dict[str, Any]:
-        """Reads Volume Limiter status."""
-        if self.transport.dry_run:
-            return {"enabled": False, "raw": LIMITER_OFF}
-
-        resp = self.transport.exchange(build_read_control_command(SUB_AMP_GAIN))
-        raw = parse_control_response(resp, SUB_AMP_GAIN)
-        enabled = (raw <= LIMITER_ON)
-        return {"enabled": enabled, "raw": raw}
-
-    def set_limiter(self, enabled: bool) -> Dict[str, Any]:
-        """Enables (85 dB volume limit) or disables (Full Dynamic Range) Volume Limiter."""
-        val = LIMITER_ON if enabled else LIMITER_OFF
-        cmd = build_write_control_command(SUB_AMP_GAIN, val)
-        self.transport.write_race_packet(cmd)
-        return {"enabled": enabled, "raw": val}
-
-    def set_limiter_fast(self, enabled: bool):
-        """Low-latency non-blocking volume limiter toggle."""
-        val = LIMITER_ON if enabled else LIMITER_OFF
-        self.transport.write_control_fast(SUB_AMP_GAIN, val)
-
     def get_status(self) -> Dict[str, Any]:
         """Collects full status information in one dictionary with per-field resilience."""
         status = {}
@@ -227,11 +202,6 @@ class MaxwellClient:
             status["noise_reduction"] = self.get_noise_reduction()
         except Exception:
             status["noise_reduction"] = {"code": 1, "name": "Low"}
-
-        try:
-            status["limiter"] = self.get_limiter()
-        except Exception:
-            status["limiter"] = {"enabled": True, "raw": 128}
 
         return status
 

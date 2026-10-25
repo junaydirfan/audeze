@@ -229,7 +229,7 @@ class TestCommandBuildersAndParsers(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             build_write_control_command(SUB_SIDETONE_ON, 2)
 
-        # Limiter: only 136 or 142
+        # Opcode 0x28 bounds check (136 or 142)
         build_write_control_command(0x28, 136)
         build_write_control_command(0x28, 142)
         with self.assertRaises(ProtocolError):
