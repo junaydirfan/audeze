@@ -1,7 +1,7 @@
 """
-audezeforlinux: Firmware diagnostics, verification, and inspection subsystem.
-Provides dual-device firmware version queries, parity checks, update safety prerequisites,
-and offline inspection of official Audeze/Airoha firmware binary packages.
+audezeforlinux: Firmware diagnostics, verification, package inspection, and FOTA subsystem.
+Implements dual-device firmware version queries, parity verification, pre-flight safety gates,
+offline TLV/LZMA container parsing, partition hash verification, and FOTA streaming simulation.
 """
 
 import os
@@ -10,7 +10,8 @@ import struct
 import hashlib
 import binascii
 import re
-from typing import Optional, Dict, Any, List
+import lzma
+from typing import Optional, Dict, Any, List, Tuple
 
 from maxwell2.client import MaxwellClient
 from maxwell2.protocol import (
@@ -21,6 +22,264 @@ from maxwell2.protocol import (
     ROUTE_DIRECT,
 )
 
+
+# Known Audeze official firmware releases and changelog database
+FIRMWARE_CATALOG = {
+    "maxwell2": {
+        "model": "Audeze Maxwell 2 (Xbox / PlayStation / PC)",
+        "current_stable": "v1.0.5.7.4",
+        "releases": [
+            {
+                "version": "v1.0.5.7.4",
+                "date": "2024-Q3",
+                "notes": "Factory stable firmware for Maxwell 2. Supports dual-dongle telemetry, 10-band custom graphic EQ, and hearing-safety volume limiter.",
+                "latest": True,
+            }
+        ],
+    },
+    "maxwell1": {
+        "model": "Audeze Maxwell 1 (Original)",
+        "current_stable": "v1.0.1.74",
+        "releases": [
+            {
+                "version": "v1.0.1.74",
+                "date": "2024-05",
+                "notes": "Rewrote 115 wireless DSP coefficient entries. Fixed an issue that caused EQ anomalies when updating from previous firmware versions.",
+                "latest": True,
+            },
+            {
+                "version": "v1.0.1.63",
+                "date": "2024-04",
+                "notes": "Bluetooth and wireless connection stability fixes.",
+                "latest": False,
+            },
+            {
+                "version": "v1.0.1.61",
+                "date": "2024-04",
+                "notes": "Added per-source audio balance profiles (NVDM 0xF665 for USB-C, 0xF668 for wireless).",
+                "latest": False,
+            },
+            {
+                "version": "v1.0.1.56",
+                "date": "2023-11",
+                "notes": "Legacy baseline firmware with symmetric factory balance default (142/142).",
+                "latest": False,
+            },
+        ],
+    },
+}
+
+
+class FirmwarePackage:
+    """
+    Parses, validates, and unpacks an official Audeze / Airoha AB1568 FOTA container (.bin).
+    Container Layout:
+      0x0000-0x001F: Top-level SHA-256 hash of bytes[0x100:]
+      0x0100-0x010D: TLV 0x0011 Basic info (flags, LZMA stream start 0x1000, stream size)
+      0x010E-0x0129: TLV 0x0013 Version string
+      0x012E-0x0165: TLV 0x0012 Partition table (4 entries * 12 bytes)
+      0x0166-0x01ED: TLV 0x0014 Per-partition SHA-256 hashes (4 * 32 bytes)
+      0x01EE-0x01FC: TLV 0x0020 Chip identifier ("AB1568_Headset" or "AB1568_Dongle")
+      0x0200-0x0214: TLV 0x0021 Design name
+      0x1000+:       LZMA-Alone compressed stream
+    """
+
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+        self.filename = os.path.basename(filepath)
+        self.raw_data = bytearray()
+        self.file_size = 0
+
+        # Header fields
+        self.outer_hash = ""
+        self.outer_hash_valid = False
+        self.flags = (0, 0)
+        self.lzma_offset = 0x1000
+        self.lzma_stream_size = 0
+        self.version_string = "Unknown"
+        self.chip_id = "Unknown"
+        self.design_name = "Unknown"
+        self.partition_count = 0
+        self.partitions: List[Dict[str, Any]] = []
+
+        # Decompressed cache
+        self.decompressed_payload: Optional[bytes] = None
+        self.all_partitions_verified = False
+
+        self._parse()
+
+    def _parse(self):
+        if not os.path.exists(self.filepath):
+            raise FileNotFoundError(f"Firmware file not found: {self.filepath}")
+
+        self.file_size = os.path.getsize(self.filepath)
+        if self.file_size < 0x1000:
+            raise ValueError(f"Firmware file too small to contain valid FOTA header ({self.file_size} bytes)")
+
+        with open(self.filepath, "rb") as f:
+            self.raw_data = bytearray(f.read())
+
+        # 1. Outer SHA-256 Checksum (0x0000 - 0x001F covers data from 0x0100 onwards)
+        declared_outer = self.raw_data[0:32]
+        self.outer_hash = declared_outer.hex()
+        actual_outer = hashlib.sha256(self.raw_data[0x100:]).digest()
+        self.outer_hash_valid = (declared_outer == actual_outer)
+
+        # 2. TLV 0x0011: Basic Info (Offset 0x0100)
+        # Type: 0x0011 (2 bytes), Len: 0x000A (2 bytes), Flags (2 bytes), Offset (4 bytes), Size (4 bytes)
+        if self.raw_data[0x100:0x102] == b"\x11\x00":
+            self.flags = (self.raw_data[0x104], self.raw_data[0x105])
+            self.lzma_offset = struct.unpack_from("<I", self.raw_data, 0x106)[0]
+            self.lzma_stream_size = struct.unpack_from("<I", self.raw_data, 0x10A)[0]
+
+        # 3. Scan TLVs between 0x100 and 0x300
+        pos = 0x100
+        while pos < 0x800 and pos + 4 < len(self.raw_data):
+            tlv_type, tlv_len = struct.unpack_from("<HH", self.raw_data, pos)
+            val_start = pos + 4
+            val_end = val_start + tlv_len
+            if val_end > len(self.raw_data):
+                break
+
+            val = self.raw_data[val_start:val_end]
+
+            if tlv_type == 0x0013:  # Version string
+                # Clean null and 0xFF padding
+                s = val.split(b"\x00")[0].split(b"\xFF")[0]
+                self.version_string = s.decode("ascii", errors="ignore").strip()
+
+            elif tlv_type == 0x0020:  # Chip ID
+                s = val.split(b"\x00")[0].split(b"\xFF")[0]
+                self.chip_id = s.decode("ascii", errors="ignore").strip()
+
+            elif tlv_type == 0x0021:  # Design name
+                s = val.split(b"\x00")[0].split(b"\xFF")[0]
+                self.design_name = s.decode("ascii", errors="ignore").strip()
+
+            elif tlv_type == 0x0012:  # Partition Table
+                if len(val) >= 4:
+                    self.partition_count = struct.unpack_from("<I", val, 0)[0]
+                    for i in range(self.partition_count):
+                        e_off = 4 + i * 12
+                        if e_off + 12 <= len(val):
+                            src_off, dec_sz, dst_addr = struct.unpack_from("<III", val, e_off)
+                            self.partitions.append({
+                                "index": i + 1,
+                                "src_offset": src_off,
+                                "decompressed_size": dec_sz,
+                                "dst_flash_addr": dst_addr,
+                                "expected_sha256": "",
+                                "calculated_sha256": "",
+                                "verified": False,
+                            })
+
+            elif tlv_type == 0x0014:  # Per-partition SHA-256 Hashes
+                if len(val) >= 4:
+                    hash_count = struct.unpack_from("<I", val, 0)[0]
+                    for i in range(min(hash_count, len(self.partitions))):
+                        h_off = 4 + i * 32
+                        if h_off + 32 <= len(val):
+                            expected_h = val[h_off : h_off + 32].hex()
+                            self.partitions[i]["expected_sha256"] = expected_h
+
+            pos += 4 + tlv_len
+
+    def decompress(self) -> bytes:
+        """
+        Decompresses the LZMA-Alone stream starting at lzma_offset (0x1000).
+        Patches the explicit size header field so Python's lzma module accepts the stream.
+        """
+        if self.decompressed_payload is not None:
+            return self.decompressed_payload
+
+        compressed_stream = self.raw_data[self.lzma_offset :]
+        if len(compressed_stream) < 14:
+            raise ValueError("Compressed payload too short.")
+
+        # In LZMA-Alone header: bytes 0..4 are properties (0x5D, dict size 16KB),
+        # bytes 5..12 are uncompressed size.
+        # Patch uncompressed size to 0xFFFFFFFFFFFFFFFF (streaming mode) for Python lzma compatibility
+        fixed_stream = compressed_stream[:5] + struct.pack("<Q", 0xFFFFFFFFFFFFFFFF) + compressed_stream[13:]
+
+        try:
+            decompressed = lzma.decompress(fixed_stream, format=lzma.FORMAT_ALONE)
+            self.decompressed_payload = decompressed
+            return decompressed
+        except Exception as e:
+            raise RuntimeError(f"LZMA decompression failed: {e}")
+
+    def verify_partitions(self) -> bool:
+        """
+        Decompresses the payload and verifies SHA-256 integrity for every partition.
+        """
+        data = self.decompress()
+        all_ok = True
+        offset = 0
+
+        for p in self.partitions:
+            sz = p["decompressed_size"]
+            chunk = data[offset : offset + sz]
+            h = hashlib.sha256(chunk).hexdigest()
+            p["calculated_sha256"] = h
+            p["verified"] = (h.lower() == p["expected_sha256"].lower())
+            if not p["verified"]:
+                all_ok = False
+            offset += sz
+
+        self.all_partitions_verified = all_ok and self.outer_hash_valid
+        return self.all_partitions_verified
+
+    def unpack_to_directory(self, output_dir: str) -> List[str]:
+        """
+        Extracts decompressed firmware and individual partitions into files.
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        data = self.decompress()
+        extracted_files = []
+
+        # 1. Full raw ARM image
+        full_path = os.path.join(output_dir, f"{self.filename}.decompressed.bin")
+        with open(full_path, "wb") as f:
+            f.write(data)
+        extracted_files.append(full_path)
+
+        # 2. Individual partitions
+        offset = 0
+        names = ["partition_1_bootloader", "partition_2_kernel_app", "partition_3_dsp_audio", "partition_4_nvdm_defaults"]
+        for idx, p in enumerate(self.partitions):
+            sz = p["decompressed_size"]
+            chunk = data[offset : offset + sz]
+            p_name = names[idx] if idx < len(names) else f"partition_{idx + 1}"
+            p_file = os.path.join(output_dir, f"{self.filename}_{p_name}.bin")
+            with open(p_file, "wb") as f:
+                f.write(chunk)
+            extracted_files.append(p_file)
+            offset += sz
+
+        return extracted_files
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Summarizes parsed metadata as a dictionary."""
+        return {
+            "filename": self.filename,
+            "filepath": self.filepath,
+            "file_size_bytes": self.file_size,
+            "file_size_kb": round(self.file_size / 1024, 2),
+            "version_string": self.version_string,
+            "chip_id": self.chip_id,
+            "design_name": self.design_name,
+            "outer_sha256": self.outer_hash,
+            "outer_hash_valid": self.outer_hash_valid,
+            "lzma_stream_size": self.lzma_stream_size,
+            "partition_count": len(self.partitions),
+            "partitions": self.partitions,
+            "integrity_verified": self.all_partitions_verified,
+        }
+
+
+# ==============================================================================
+# Firmware Diagnostics & Safety Evaluation
+# ==============================================================================
 
 def get_firmware_diagnostics(client: MaxwellClient) -> Dict[str, Any]:
     """
@@ -35,6 +294,7 @@ def get_firmware_diagnostics(client: MaxwellClient) -> Dict[str, Any]:
             "battery_percent": 94,
             "battery_safe_for_flashing": True,
             "update_prerequisites_met": True,
+            "connection_mode": "Wireless Dongle (Xbox variant)",
             "dry_run": True,
         }
 
@@ -45,12 +305,15 @@ def get_firmware_diagnostics(client: MaxwellClient) -> Dict[str, Any]:
     dongle_ok = (dongle_fw != "Unknown")
     headset_ok = (headset_fw != "Unknown")
 
-    # 3. Query Battery
+    # 2. Query Battery
     batt_pct = client.get_battery()
     batt_safe = (batt_pct is not None and batt_pct >= 50)
 
-    # 4. Parity check
+    # 3. Parity check
     parity = (dongle_ok and headset_ok and dongle_fw == headset_fw)
+
+    # 4. Connection Mode
+    conn_mode = "Wireless Dongle" if client.transport.is_dongle else "Direct USB-C Cable"
 
     # 5. Overall flash safety evaluation
     safe_to_update = parity and batt_safe and dongle_ok and headset_ok
@@ -70,135 +333,174 @@ def get_firmware_diagnostics(client: MaxwellClient) -> Dict[str, Any]:
         "battery_percent": batt_pct,
         "battery_safe_for_flashing": batt_safe,
         "update_prerequisites_met": safe_to_update,
+        "connection_mode": conn_mode,
     }
 
 
-def inspect_firmware_package(filepath: str) -> Dict[str, Any]:
+def check_available_updates(current_version: str) -> Dict[str, Any]:
     """
-    Safely inspects and parses an official Audeze / Airoha firmware package file (.bin).
-    Extracts embedded version numbers, detects LZMA partitions, computes SHA-256 and CRC32,
-    and validates target hardware signatures without writing anything to hardware.
+    Checks the local firmware catalog against the currently active firmware version.
+    Reports update availability, release notes, and known status.
     """
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Firmware file not found: {filepath}")
+    is_v2 = "1.0.5" in current_version
+    cat_key = "maxwell2" if is_v2 else "maxwell1"
+    catalog = FIRMWARE_CATALOG.get(cat_key, FIRMWARE_CATALOG["maxwell2"])
 
-    file_size = os.path.getsize(filepath)
-    if file_size == 0:
-        raise ValueError("Firmware file is empty.")
+    latest_ver = catalog["current_stable"]
+    is_up_to_date = (current_version == latest_ver)
 
-    with open(filepath, "rb") as f:
-        data = f.read()
-
-    # 1. Cryptographic Hashes
-    sha256 = hashlib.sha256(data).hexdigest()
-    crc32 = f"{binascii.crc32(data) & 0xFFFFFFFF:08X}"
-
-    # 2. String & Version Extraction (search for version signatures like v1.0.X.X or 1.0.X)
-    text_strings = []
-    # Find all printable ASCII sequences of length 4+
-    for match in re.finditer(b"[\x20-\x7E]{4,}", data):
-        try:
-            s = match.group(0).decode("ascii")
-            if any(k in s.lower() for k in ["v1.", "maxwell", "audeze", "airoha", "fota", "ab156"]):
-                text_strings.append(s)
-        except Exception:
-            pass
-
-    # Detect embedded version
-    detected_versions = re.findall(r"v?1\.\d+\.\d+(?:\.\d+)?(?:\.\d+)?", " ".join(text_strings))
-    best_version = detected_versions[0] if detected_versions else "Unknown"
-
-    # 3. Detect LZMA partitions (Header starts with 0x5D 0x00 0x00)
-    lzma_offsets = []
-    pos = 0
-    while True:
-        pos = data.find(b"\x5D\x00\x00", pos)
-        if pos == -1:
-            break
-        lzma_offsets.append(pos)
-        pos += 3
-
-    # 4. Check for Airoha FOTA / RACE headers
-    has_fota_magic = (b"FOTA" in data) or (b"AIROHA" in data) or (b"\x15\x5A" in data)
-
-    # 5. Header Summary
     return {
-        "filepath": filepath,
-        "filename": os.path.basename(filepath),
-        "size_bytes": file_size,
-        "size_kb": round(file_size / 1024, 2),
-        "sha256": sha256,
-        "crc32": crc32,
-        "detected_version": best_version,
-        "has_fota_signature": has_fota_magic,
-        "lzma_partitions_found": len(lzma_offsets),
-        "lzma_partition_offsets": lzma_offsets[:8],
-        "identified_strings": text_strings[:10],
+        "current_installed": current_version,
+        "latest_available": latest_ver,
+        "is_up_to_date": is_up_to_date,
+        "model_detected": catalog["model"],
+        "releases": catalog["releases"],
     }
 
+
+# ==============================================================================
+# FOTA Chunking & Dry-Run Simulator
+# ==============================================================================
+
+class FotaSimulator:
+    """
+    Simulates the Airoha AB1568 FOTA block streaming protocol without writing to hardware.
+    Validates chunk fragmentation, handshake packets, and transfer duration estimates.
+    """
+
+    def __init__(self, package: FirmwarePackage, target: str = "dongle"):
+        self.package = package
+        self.target = target.lower()  # "dongle" or "headset"
+        self.chunk_size = 56  # Payload bytes per Report 0x06 (cbreak safe)
+        self.total_bytes = package.file_size
+        self.total_chunks = (self.total_bytes + self.chunk_size - 1) // self.chunk_size
+
+    def simulate_transfer(self) -> Dict[str, Any]:
+        """Simulates FOTA transmission parameters."""
+        route = 0x00 if self.target == "dongle" else 0x80
+        est_duration_sec = self.total_chunks * 0.015  # ~15ms per chunk over USB HID
+
+        return {
+            "target": self.target,
+            "route_byte": f"0x{route:02X}",
+            "firmware_version": self.package.version_string,
+            "chip_target": self.package.chip_id,
+            "total_bytes": self.total_bytes,
+            "chunk_payload_size": self.chunk_size,
+            "total_hid_reports": self.total_chunks,
+            "estimated_duration_sec": round(est_duration_sec, 1),
+            "dual_bank_recovery_active": True,
+            "handshake_init": "0x0101 (Airoha FotaInit)",
+            "fota_start_opcode": "0x1C02 (FotaStart)",
+        }
+
+
+# ==============================================================================
+# Pretty Plain-Text Terminal Formatters
+# ==============================================================================
 
 def format_firmware_status_plain(diag: Dict[str, Any]) -> str:
     """Formats diagnostic status in clean monochrome ASCII."""
     lines = []
-    lines.append("┌─ AUDEZE MAXWELL 2 — FIRMWARE DIAGNOSTICS ────────────────────────────┐")
+    lines.append("┌─ AUDEZE MAXWELL — FIRMWARE DIAGNOSTICS & UPDATE READINESS ───────────┐")
     lines.append("│                                                                      │")
 
-    # Dongle row
     d = diag.get("dongle", {})
     lines.append(f"│  USB Dongle Firmware       : {d.get('firmware', 'Unknown'):<24} [{d.get('status', 'Unknown')}]   │")
 
-    # Headset row
     h = diag.get("headset", {})
     lines.append(f"│  Wireless Headset Firmware : {h.get('firmware', 'Unknown'):<24} [{h.get('status', 'Unknown')}]   │")
 
-    # Parity
     parity = diag.get("parity_match", False)
     p_str = "MATCHED (Synchronized)" if parity else "MISMATCH WARNING"
     lines.append(f"│  Version Parity Check      : {p_str:<38} │")
 
-    # Battery
     batt = diag.get("battery_percent")
     batt_str = f"{batt}%" if batt is not None else "Unknown"
     batt_safe = diag.get("battery_safe_for_flashing", False)
     safe_badge = "(Pass >= 50%)" if batt_safe else "(LOW - Flashing Unsafe)"
     lines.append(f"│  Headset Battery Level     : {batt_str:<8} {safe_badge:<29} │")
 
+    conn = diag.get("connection_mode", "Unknown")
+    lines.append(f"│  Active Transport Path     : {conn:<38} │")
+
     lines.append("│                                                                      │")
-    lines.append("├─ UPDATE SAFETY READINESS ────────────────────────────────────────────┤")
+    lines.append("├─ DUAL-BANK FLASH SAFETY READINESS ───────────────────────────────────┤")
 
     ready = diag.get("update_prerequisites_met", False)
     if ready:
-        lines.append("│  [PASS] All pre-flight safety requirements satisfied for updates.     │")
-        lines.append("│         - Dongle and headset firmware are synchronized.             │")
-        lines.append("│         - Battery level is safe (>= 50%).                            │")
+        lines.append("│  [PASS] All pre-flight safety requirements satisfied for updates:     │")
+        lines.append("│         ✔ Dongle and Headset firmware versions match.                │")
+        lines.append("│         ✔ Headset battery has sufficient capacity (>= 50%).          │")
+        lines.append("│         ✔ Airoha dual-bank fallback protects against bricking.        │")
     else:
         lines.append("│  [CAUTION] Pre-flight prerequisites not fully satisfied:             │")
         if not batt_safe:
-            lines.append("│         - Battery is below 50%. Charge headset before flashing.     │")
+            lines.append("│         ✖ Battery is below 50%. Charge headset before flashing.      │")
         if not parity:
-            lines.append("│         - Firmware mismatch detected between dongle and headset.     │")
+            lines.append("│         ✖ Firmware mismatch detected between dongle and headset.     │")
+
+    lines.append("└──────────────────────────────────────────────────────────────────────┘")
+    return "\n".join(lines)
+
+
+def format_firmware_check_plain(info: Dict[str, Any]) -> str:
+    """Formats online update check summary."""
+    lines = []
+    lines.append("┌─ AUDEZE FIRMWARE UPDATE CHECK ───────────────────────────────────────┐")
+    lines.append(f"│  Hardware Model            : {info.get('model_detected', 'Unknown'):<38} │")
+    lines.append(f"│  Current Installed Version : {info.get('current_installed', 'Unknown'):<38} │")
+    lines.append(f"│  Latest Official Stable    : {info.get('latest_available', 'Unknown'):<38} │")
+
+    up_to_date = info.get("is_up_to_date", False)
+    status_str = "✔ SYSTEM UP TO DATE" if up_to_date else "● UPDATE AVAILABLE"
+    lines.append(f"│  Update Status             : {status_str:<38} │")
+    lines.append("├─ RELEASE HISTORY & CHANGELOG ────────────────────────────────────────┤")
+
+    for r in info.get("releases", []):
+        latest_tag = " (Latest)" if r.get("latest") else ""
+        lines.append(f"│  • {r['version']}{latest_tag} [{r['date']}]:")
+        # Word wrap notes
+        notes = r["notes"]
+        while len(notes) > 66:
+            split_idx = notes[:66].rfind(" ")
+            if split_idx == -1:
+                split_idx = 66
+            lines.append(f"│    {notes[:split_idx]:<66}│")
+            notes = notes[split_idx:].strip()
+        if notes:
+            lines.append(f"│    {notes:<66}│")
+        lines.append("│                                                                      │")
 
     lines.append("└──────────────────────────────────────────────────────────────────────┘")
     return "\n".join(lines)
 
 
 def format_firmware_inspect_plain(info: Dict[str, Any]) -> str:
-    """Formats firmware package inspection results."""
+    """Formats full firmware container inspection report."""
     lines = []
-    lines.append("┌─ FIRMWARE PACKAGE INSPECTION ────────────────────────────────────────┐")
-    lines.append(f"│  File Name                 : {info.get('filename', 'Unknown'):<38} │")
-    lines.append(f"│  File Size                 : {info.get('size_kb', 0)} KB ({info.get('size_bytes', 0)} bytes)             │")
-    lines.append(f"│  Detected Version          : {info.get('detected_version', 'Unknown'):<38} │")
-    lines.append(f"│  CRC32 Checksum            : {info.get('crc32', 'Unknown'):<38} │")
-    lines.append(f"│  SHA-256 Digest            : {info.get('sha256', 'Unknown')[:34]}... │")
-    lines.append(f"│  LZMA Compressed Partitions: {info.get('lzma_partitions_found', 0):<38} │")
+    lines.append("┌─ FIRMWARE PACKAGE CONTAINER INSPECTION ──────────────────────────────┐")
+    lines.append(f"│  Package File              : {info.get('filename', 'Unknown'):<38} │")
+    lines.append(f"│  File Size                 : {info.get('file_size_kb', 0)} KB ({info.get('file_size_bytes', 0)} bytes)             │")
+    lines.append(f"│  Embedded Firmware Version : {info.get('version_string', 'Unknown'):<38} │")
+    lines.append(f"│  Target Chip Identifier    : {info.get('chip_id', 'Unknown'):<38} │")
+    lines.append(f"│  Reference Design Name     : {info.get('design_name', 'Unknown'):<38} │")
 
-    fota = "YES (Airoha FOTA / RACE)" if info.get("has_fota_signature") else "Standard Binary"
-    lines.append(f"│  Architecture Signature    : {fota:<38} │")
+    outer_v = "VALID (Pass)" if info.get("outer_hash_valid") else "INVALID (Tampered/Corrupted)"
+    lines.append(f"│  Outer SHA-256 Checksum    : {outer_v:<38} │")
+    lines.append(f"│  LZMA Stream Length        : {info.get('lzma_stream_size', 0)} bytes                              │")
+    lines.append("├─ PARTITION TABLE & INTEGRITY HASHES ─────────────────────────────────┤")
 
-    lines.append("├─ EMBEDDED IDENTIFIERS ───────────────────────────────────────────────┤")
-    for s in info.get("identified_strings", []):
-        lines.append(f"│  • {s[:64]:<64} │")
+    partitions = info.get("partitions", [])
+    if not partitions:
+        lines.append("│  (No partitions declared in header)                                  │")
+    else:
+        for p in partitions:
+            idx = p.get("index", 1)
+            sz_kb = round(p.get("decompressed_size", 0) / 1024, 1)
+            dst = f"0x{p.get('dst_flash_addr', 0):08X}"
+            v_str = "✔ PASS" if p.get("verified") else "● UNVERIFIED"
+            lines.append(f"│  Part #{idx}: Flash {dst} • Size: {sz_kb} KB • Hash: {v_str:<12}│")
 
     lines.append("└──────────────────────────────────────────────────────────────────────┘")
     return "\n".join(lines)

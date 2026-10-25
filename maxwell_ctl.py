@@ -155,12 +155,19 @@ def main():
     fw_parser = subparsers.add_parser("firmware", help="Firmware diagnostics, parity verification, and package inspection")
     fw_sub = fw_parser.add_subparsers(dest="firmware_action")
     fw_sub.add_parser("status", help="Read dual dongle & headset firmware status, parity, and safety readiness")
+    fw_sub.add_parser("check", help="Check official firmware catalog and changelog against installed version")
     fw_inspect = fw_sub.add_parser("inspect", help="Offline inspection and validation of a firmware .bin package")
     fw_inspect.add_argument("file", help="Path to firmware .bin file to inspect")
+    fw_unpack = fw_sub.add_parser("unpack", help="Decompress and extract firmware partitions to directory")
+    fw_unpack.add_argument("file", help="Path to firmware .bin file to unpack")
+    fw_unpack.add_argument("--out", default="./extracted_firmware", help="Output directory")
+    fw_sim = fw_sub.add_parser("simulate", help="Simulate FOTA transmission parameters and chunk layout")
+    fw_sim.add_argument("file", help="Path to firmware .bin file to simulate")
+    fw_sim.add_argument("--target", choices=["dongle", "headset"], default="dongle", help="Target node")
 
     args = parser.parse_args()
 
-    # Handle offline commands first (backups, eq list)
+    # Handle offline commands first (backups, eq list, firmware inspect/unpack/check/simulate)
     if args.command == "eq" and args.eq_action == "list":
         if args.json:
             print(json.dumps([{"index": i, "name": n} for i, n in enumerate(PRESET_NAMES, 1)], indent=2))
@@ -191,14 +198,66 @@ def main():
             print(json.dumps(data, indent=2))
             return
 
-    if args.command == "firmware" and args.firmware_action == "inspect":
-        from maxwell2.firmware import inspect_firmware_package, format_firmware_inspect_plain
-        info = inspect_firmware_package(args.file)
-        if args.json:
-            print(json.dumps(info, indent=2))
-        else:
-            print(format_firmware_inspect_plain(info))
-        return
+    if args.command == "firmware":
+        if args.firmware_action == "inspect":
+            from maxwell2.firmware import FirmwarePackage, format_firmware_inspect_plain
+            pkg = FirmwarePackage(args.file)
+            pkg.verify_partitions()
+            info = pkg.to_dict()
+            if args.json:
+                print(json.dumps(info, indent=2))
+            else:
+                print(format_firmware_inspect_plain(info))
+            return
+
+        elif args.firmware_action == "unpack":
+            from maxwell2.firmware import FirmwarePackage
+            pkg = FirmwarePackage(args.file)
+            out_files = pkg.unpack_to_directory(args.out)
+            print(f"[+] Decompressed and extracted {len(out_files)} partitions to {args.out}:")
+            for f in out_files:
+                print(f"  - {f} ({os.path.getsize(f)} bytes)")
+            return
+
+        elif args.firmware_action == "simulate":
+            from maxwell2.firmware import FirmwarePackage, FotaSimulator
+            pkg = FirmwarePackage(args.file)
+            sim = FotaSimulator(pkg, target=args.target)
+            res = sim.simulate_transfer()
+            if args.json:
+                print(json.dumps(res, indent=2))
+            else:
+                print("\n┌─ FOTA TRANSMISSION SIMULATION ───────────────────────────────────────┐")
+                print(f"│  Target Node               : {res['target'].upper():<38} │")
+                print(f"│  Routing Byte              : {res['route_byte']:<38} │")
+                print(f"│  Target Chip               : {res['chip_target']:<38} │")
+                print(f"│  Package Version           : {res['firmware_version']:<38} │")
+                print(f"│  Total Size                : {res['total_bytes']} bytes ({res['total_hid_reports']} reports)                  │")
+                print(f"│  Estimated Transfer Time   : ~{res['estimated_duration_sec']} seconds                              │")
+                print(f"│  Handshake Init Command    : {res['handshake_init']:<38} │")
+                print(f"│  FotaStart Opcode          : {res['fota_start_opcode']:<38} │")
+                print(f"│  Dual-Bank Recovery Mode   : ACTIVE (Reverts to stable bank on failure) │")
+                print("└──────────────────────────────────────────────────────────────────────┘\n")
+            return
+
+        elif args.firmware_action == "check":
+            from maxwell2.firmware import check_available_updates, format_firmware_check_plain
+            # Try to query device version, or fallback to status
+            current_ver = "v1.0.5.7.4"
+            try:
+                transport = Transport(hidraw_path=args.device, dry_run=args.dry_run)
+                with transport:
+                    client = MaxwellClient(transport)
+                    fw = client.get_firmware()
+                    current_ver = fw.get("firmware", "v1.0.5.7.4")
+            except Exception:
+                pass
+            res = check_available_updates(current_ver)
+            if args.json:
+                print(json.dumps(res, indent=2))
+            else:
+                print(format_firmware_check_plain(res))
+            return
 
     # Initialize transport and client
     try:

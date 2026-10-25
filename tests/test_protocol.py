@@ -5,6 +5,8 @@ Requires NO hardware connection - pure offline packet verification.
 
 import unittest
 import struct
+import os
+import hashlib
 from maxwell2.protocol import (
     build_race_packet,
     parse_race_packet,
@@ -256,6 +258,60 @@ class TestCommandBuildersAndParsers(unittest.TestCase):
         # Clear buffer test
         stream.clear()
         self.assertEqual(len(stream.buffer), 0)
+
+    def test_firmware_package_parsing_and_verification(self):
+        """Verifies TLV parsing, LZMA decompression, and partition SHA verification."""
+        import tempfile, lzma
+        from maxwell2.firmware import FirmwarePackage, FotaSimulator, check_available_updates
+
+        # Test catalog
+        chk = check_available_updates("v1.0.5.7.4")
+        self.assertTrue(chk["is_up_to_date"])
+        self.assertEqual(chk["latest_available"], "v1.0.5.7.4")
+
+        # Build synthetic package
+        p1 = b"PARTITION_BOOTLOADER_" * 20
+        p2 = b"PARTITION_KERNEL_APP_" * 20
+        parts = [p1, p2]
+        decomp = p1 + p2
+
+        filters = [{"id": lzma.FILTER_LZMA1, "dict_size": 16384, "lc": 3, "lp": 0, "pb": 2}]
+        comp = bytearray(lzma.compress(decomp, format=lzma.FORMAT_ALONE, filters=filters))
+        comp[5:13] = struct.pack("<Q", len(decomp))
+
+        hdr = bytearray(b"\xFF" * 0x1000)
+        hdr[0x100:0x10E] = struct.pack("<HHBBII", 0x0011, 10, 1, 1, 0x1000, len(comp))
+        hdr[0x10E:0x124] = struct.pack("<HH", 0x0013, 10) + b"v1.0.5.7.4\x00" + b"\xFF" * 7
+
+        pt = struct.pack("<I", 2)
+        pt += struct.pack("<III", 0x1000, len(p1), 0x08013000)
+        pt += struct.pack("<III", 0x1000 + len(p1), len(p2), 0x08133000)
+        hdr[0x12E : 0x12E + 4 + len(pt)] = struct.pack("<HH", 0x0012, len(pt)) + pt
+
+        hashes = struct.pack("<I", 2) + hashlib.sha256(p1).digest() + hashlib.sha256(p2).digest()
+        h_off = 0x12E + 4 + len(pt)
+        hdr[h_off : h_off + 4 + len(hashes)] = struct.pack("<HH", 0x0014, len(hashes)) + hashes
+
+        full = hdr + comp
+        full[0:32] = hashlib.sha256(full[0x100:]).digest()
+
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            f.write(full)
+            t_path = f.name
+
+        try:
+            pkg = FirmwarePackage(t_path)
+            self.assertEqual(pkg.version_string, "v1.0.5.7.4")
+            self.assertTrue(pkg.outer_hash_valid)
+            self.assertTrue(pkg.verify_partitions())
+
+            sim = FotaSimulator(pkg, "dongle")
+            res = sim.simulate_transfer()
+            self.assertEqual(res["target"], "dongle")
+            self.assertGreater(res["total_hid_reports"], 0)
+        finally:
+            if os.path.exists(t_path):
+                os.unlink(t_path)
 
 
 if __name__ == "__main__":

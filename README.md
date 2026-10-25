@@ -149,6 +149,25 @@ audezeforlinux backup list
 audezeforlinux backup show backup_set_preset_20261025_034403.json
 ```
 
+### Firmware Diagnostics, Inspection & Updates
+Comprehensive tools for managing firmware lifecycle and verifying update safety:
+```bash
+# 1. Dual-node version check, parity verification & battery safety gate
+audezeforlinux firmware
+
+# 2. Check official release catalog and changelogs against installed version
+audezeforlinux firmware check
+
+# 3. Offline inspection of an official .bin firmware package (SHA-256 & partition hashes)
+audezeforlinux firmware inspect path/to/firmware.bin
+
+# 4. Decompress LZMA payload and extract individual partitions (Bootloader, Kernel, DSP, NVDM)
+audezeforlinux firmware unpack path/to/firmware.bin --out ./extracted_firmware
+
+# 5. Simulate FOTA transmission and chunk fragmentation without touching hardware
+audezeforlinux firmware simulate path/to/firmware.bin --target headset
+```
+
 ### Dry-Run Simulation Mode
 Inspect exact USB HID report byte layouts without opening or transmitting to the hardware:
 ```bash

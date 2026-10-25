@@ -59,37 +59,76 @@ While standard settings and telemetry use RACE sync byte `0x05`, Airoha's Firmwa
 
 ---
 
-## 4. Firmware Image Container Format
+---
 
-Official Audeze Maxwell firmware distributions encapsulate Airoha AB1568 multi-binary packages containing:
-1. **Package Header**: Target product ID list (`0x4B28`, `0x4B29`, `0x4B2A`), version string, and total image length.
-2. **System Partition**: Bootloader and OS kernel image.
-3. **DSP Partition**: Tensilica HiFi DSP algorithms, biquad filter engines, and AI noise suppression models.
-4. **NVDM Default Table**: Default Non-Volatile Data Memory key/value table (including factory EQ presets 1–6 and baseline volume limiter tables).
-5. **Checksum Block**: CRC32 and SHA-256 signatures for each discrete partition.
+## 4. Firmware Image Container Format (Reverse-Engineered Ground Truth)
+
+Official Audeze Maxwell firmware distributions (`.bin`) encapsulate Airoha AB1568 multi-binary packages structured as follows:
+
+```
+0x0000-0x001F : 32-byte top-level SHA-256 checksum of data[0x100:]
+0x0020-0x00FF : 0xFF padding
+0x0100-0x010D : TLV 0x0011 = Basic info (10 bytes value)
+                bytes 0-1: flags (01 01)
+                bytes 2-5: LZMA stream start (LE 0x00001000)
+                bytes 6-9: LZMA stream size (LE 32-bit integer — must match exact compressed size)
+0x010E-0x0129 : TLV 0x0013 = Version string (e.g. "v1.0.5.7.4\0" + 0xFF padding)
+0x012E-0x0165 : TLV 0x0012 = Partition table (52 bytes: 4 count + 4 entries × 12 bytes)
+                Each entry: src_offset (LE32), decompressed_size (LE32), dst_flash_addr (LE32)
+0x0166-0x01ED : TLV 0x0014 = Per-partition SHA-256 hashes (132 bytes: 4 count + 4 × 32-byte hashes)
+0x01EE-0x01FC : TLV 0x0020 = Chip identifier ("AB1568_Headset" or "AB1568_Dongle")
+0x0200-0x0214 : TLV 0x0021 = Design reference name ("headset_ref_design" or "dongle_ref_design")
+0x0216-0x021A : TLV 0x00F0 = Misc flag (1 byte: 0x01)
+0x021B-0x0FFF : 0xFF padding
+0x1000+       : LZMA-Alone compressed stream (lc=3, lp=0, pb=2, dict=16KB, decompressed size ~3.2 MB)
+```
+
+### Partition Mapping (Airoha AB1568 SPI Flash)
+1. **Partition 1 (Bootloader / HAL)**: `dst_flash = 0x08013000`, size ~1.1 MB
+2. **Partition 2 (Kernel / App / FreeRTOS)**: `dst_flash = 0x08133000` (contains reset vector), size ~1.6 MB
+3. **Partition 3 (Tensilica HiFi DSP Audio Pipeline)**: `dst_flash = 0x0832C000`, size ~80 KB
+4. **Partition 4 (NVDM Factory Defaults & Audio Calibration)**: `dst_flash = 0x08450000`, size ~300 KB
+
+### Dual-Bank Flash Safety Model
+The Airoha AB1568 employs a **dual-bank flash architecture**:
+- The current operating firmware runs from **Bank A**.
+- Firmware updates stream sequentially into the inactive **Bank B**.
+- The bootloader verifies all 4 partition hashes (`TLV 0x0014`) and the outer SHA-256 before swapping the active bank flag.
+- If a transmission is aborted or corrupted, the bootloader reverts to Bank A, preventing hard bricking.
+- Verification is **keyless SHA-256 only** — no asymmetric ECDSA/RSA keys exist in the bootloader.
 
 ---
 
-## 5. Development Roadmap: Steps Toward a Safe Linux Flasher
+## 5. Firmware Management CLI Commands
 
-To ensure total safety and avoid bricking hardware, firmware update support will be developed strictly according to the following phased milestones:
+### 1. Dual-Node Status & Pre-Flight Diagnostic Gate
+```bash
+audezeforlinux firmware
+# or
+audezeforlinux firmware status
+```
+Queries both dongle and headset, evaluates version parity, and checks if battery is $\ge 50\%$.
 
-### Milestone 1: Non-Destructive Version Checking (Completed)
-- Implement independent firmware version queries for both dongle (`route 0x00`) and headset (`route 0x80`).
-- Display firmware versions side-by-side in `status` and `dashboard` with parity warning if versions diverge.
+### 2. Check for Online Releases & Changelogs
+```bash
+audezeforlinux firmware check
+```
+Compares installed firmware against known releases and lists changelog details.
 
-### Milestone 2: Offline Firmware Package Inspector
-- Build an offline tool `scripts/inspect_firmware.py` to parse official firmware `.bin` files:
-  - Extract version strings, target device IDs, and partition sizes.
-  - Compute and verify checksums against official manifests without sending anything to hardware.
+### 3. Deep Package Inspection & Hash Verification
+```bash
+audezeforlinux firmware inspect path/to/firmware.bin
+```
+Parses all TLVs, verifies the outer SHA-256 checksum, decompresses LZMA partitions, and validates each partition's SHA-256 hash.
 
-### Milestone 3: Passive Protocol Capture Analysis
-- Capture official Audeze HQ firmware update sessions via USBPcap / `usbmon`:
-  - Map bootloader entry commands.
-  - Map FOTA block chunking sizes and acknowledgment pacing.
-  - Mark every command as **CONFIRMED** in `docs/PROTOCOL.md`.
+### 4. Partition Unpacker & Decompressor
+```bash
+audezeforlinux firmware unpack path/to/firmware.bin --out ./extracted_firmware
+```
+Decompresses the LZMA payload and extracts all 4 individual partitions as raw binary files for inspection.
 
-### Milestone 4: Two-Step Interactive CLI Flasher
-- Require explicit command line confirmation (`maxwell-ctl firmware flash <file.bin> --confirm-risk`).
-- Perform pre-flight battery and connection checks.
-- Support progress bar reporting with block retry and safe abort.
+### 5. FOTA Transmission Simulation (Dry-Run Mode)
+```bash
+audezeforlinux firmware simulate path/to/firmware.bin --target headset
+```
+Simulates the entire FOTA block fragmentation layout across 62-byte HID reports without transmitting to physical hardware.
