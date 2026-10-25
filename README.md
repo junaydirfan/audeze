@@ -1,10 +1,7 @@
 <h1 align="center">Audeze for Linux</h1>
 
 <p align="center">
-  <a href="https://github.com/junaydirfan/audezeforlinux/actions/workflows/ci.yml"><img alt="CI Status" src="https://img.shields.io/github/actions/workflow/status/junaydirfan/audezeforlinux/ci.yml?branch=master&label=CI&style=flat-square&logo=githubactions&logoColor=white"></a>
   <a href="https://github.com/junaydirfan/audezeforlinux/actions/workflows/codeql.yml"><img alt="CodeQL Security Scan" src="https://img.shields.io/github/actions/workflow/status/junaydirfan/audezeforlinux/codeql.yml?branch=master&label=CodeQL%20Scan&style=flat-square&logo=github&logoColor=white"></a>
-  <a href="https://sonarcloud.io"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/SonarCloud-Clean_Code-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
-  <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/Code%20Style-Ruff-261230?style=flat-square&logo=ruff&logoColor=white"></a>
   <a href="https://python.org"><img alt="Python 3.8+" src="https://img.shields.io/badge/Python-3.8+-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="https://pipewire.org"><img alt="PipeWire & WirePlumber" src="https://img.shields.io/badge/Audio-PipeWire%20%7C%20WirePlumber-brightgreen?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat-square"></a>
