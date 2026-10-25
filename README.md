@@ -63,12 +63,24 @@ maxwell-ctl status
 
 ## CLI Usage
 
+### Interactive Live Console Dashboard
+Launch a live keyboard-controlled TUI dashboard directly in your terminal:
+```bash
+maxwell-ctl dashboard
+```
+- **Hotkeys**:
+  - `1` – `6`: Instantly activate factory presets (Audeze, Treble, Bass, Immersive, Competition, Footsteps)
+  - `7` – `0`: Instantly activate Custom slots 1 – 4
+  - `s`: Toggle sidetone on / off
+  - `r`: Refresh live telemetry
+  - `q` / `Esc`: Exit
+
 ### View Device Status
-Displays active preset, battery level, firmware version, mic switch, sidetone, and chat mix:
+Displays the stylized ASCII branding, active preset pill, color battery gauge, mic status, and crossfader slider:
 ```bash
 maxwell-ctl status
 ```
-*(Add `--json` for machine-readable JSON output).*
+*(Add `--plain` for plain ASCII or `--json` for machine-readable JSON output).*
 
 ### Switch Active Preset
 ```bash
