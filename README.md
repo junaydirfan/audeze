@@ -14,7 +14,7 @@
      Example: https://github.com/junaydirfan/audezeforlinux/assets/.../dashboard_demo.mp4 -->
 
 <p align="center">
-  <a href="#interactive-live-studio-dashboard"><img src="docs/assets/dashboard_preview.png" alt="Audeze for Linux Studio Dashboard" width="850"></a>
+  <a href="#interactive-live-studio-dashboard"><img src="docs/assets/db.png" alt="Audeze for Linux Studio Dashboard" width="850"></a>
 </p>
 
 <p align="center">
