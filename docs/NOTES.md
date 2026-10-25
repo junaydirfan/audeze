@@ -44,20 +44,20 @@
   - Controls: Subcommands for Sidetone (`0x07`/`0x2C`), Chat Mix (`0x0B`), Limiter (`0x28`), AI Noise Suppression (`0x24`), Mic Mute (`0x22`).
   - Equalizer: NVDM storage keys `0xEF00..0xEF03` for 10-band slider records (185 bytes each, little-endian); keys `0xE42C..0xE42F` for 844-byte DSP biquads.
 
-### Phase 3: Safe Client & CLI (Completed)
-- **Status**: Full Python module, transport layer, backup manager, CLI (`maxwell-ctl`), udev rules, and pyproject.toml created.
-- **Components Built**:
-  - `maxwell2/transport.py`: Linux `/dev/hidraw` transport with auto-discovery, report chunking, and `--dry-run` simulation.
-  - `maxwell2/backup.py`: Pre-write snapshot manager creating timestamped rollback JSON files in `~/.config/maxwell2/backups/`.
-  - `maxwell2/client.py`: High-level operations (`get_status`, `set_preset`, `read_custom_eq`, `set_sidetone`, `set_chat_mix`, `dump_all`).
-  - `maxwell_ctl.py`: Full CLI utility supporting:
-    - `maxwell-ctl status`
-    - `maxwell-ctl eq preset <name>`
-    - `maxwell-ctl eq list`
-    - `maxwell-ctl eq custom <slot> [--export file.json]`
-    - `maxwell-ctl sidetone <0-31|on|off>`
-    - `maxwell-ctl chatmix <0-100>`
-    - `maxwell-ctl dump [--out file.json]`
-    - `maxwell-ctl backup list` / `maxwell-ctl backup show <file>`
-- **Assumptions vs. Verified**:
-  - *Verified*: Dry-run report generation and report chunking produce exact byte sequences matching the specification. Pre-write backups write and load valid JSON snapshots. All unit tests pass.
+### Phase 3: Safe Client & CLI (Live Verified)
+- **Status**: Live hardware communication verified without root via udev rules.
+- **Key Breakthrough (HID Input Mechanism)**:
+  - The Audeze dongle Interface 5 has only 1 USB endpoint (`0x82` Interrupt IN).
+  - Responses to commands are retrieved via USB Control Endpoint 0 (`GET_REPORT`), which in Linux `hidraw` corresponds to `ioctl(fd, HIDIOCGINPUT(62), buf)`.
+  - Standard `os.read(fd)` was timing out because the kernel only queues reports to `read()` when pushed autonomously over Interrupt IN.
+  - Adding `HIDIOCGINPUT` polling resolved the timeout completely.
+- **Live Hardware Telemetry Verified**:
+  - Active Preset: `[4] Immersive`
+  - Battery Level: `94%`
+  - Firmware Version: `v1.0.5.7.4`
+  - Hardware Mic Switch: `UNMUTED`
+  - Sidetone: `OFF (Level 5/31)`
+  - Game/Chat Balance: `50% Game / 50% Chat`
+  - AI Noise Reduction: `Low`
+  - Volume Limiter: `Enabled (85 dB)`
+  - Custom EQ Slots 1..4: All 10 bands successfully read from NVDM keys `0xEF00..0xEF03`.
