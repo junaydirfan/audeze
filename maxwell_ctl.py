@@ -144,14 +144,18 @@ def main():
     dump_parser = subparsers.add_parser("dump", help="Dump complete state and all 4 custom EQ slots as JSON")
     dump_parser.add_argument("--out", help="Save dump to specified JSON file")
 
-    # 7. backup
+    # 7. limiter
+    lim_parser = subparsers.add_parser("limiter", help="Query or control hearing safety volume limiter (85 dB)")
+    lim_parser.add_argument("state", nargs="?", choices=["on", "off"], help="Enable or disable limiter")
+
+    # 8. backup
     bk_parser = subparsers.add_parser("backup", help="Manage automated pre-write configuration backups")
     bk_sub = bk_parser.add_subparsers(dest="backup_action", required=True)
     bk_sub.add_parser("list", help="List all available backups")
     bk_show = bk_sub.add_parser("show", help="Display details of a backup file")
     bk_show.add_argument("file", help="Filename or path of backup")
 
-    # 8. firmware
+    # 9. firmware
     fw_parser = subparsers.add_parser("firmware", help="Firmware diagnostics, parity verification, and package inspection")
     fw_sub = fw_parser.add_subparsers(dest="firmware_action")
     fw_sub.add_parser("status", help="Read dual dongle & headset firmware status, parity, and safety readiness")
@@ -165,6 +169,11 @@ def main():
     fw_sim = fw_sub.add_parser("simulate", help="Simulate FOTA transmission parameters and chunk layout")
     fw_sim.add_argument("file", help="Path to firmware .bin file to simulate")
     fw_sim.add_argument("--target", choices=["dongle", "headset"], default="dongle", help="Target node")
+    fw_flash = fw_sub.add_parser("flash", help="Stream firmware update to target node with dual-bank protection")
+    fw_flash.add_argument("file", help="Path to firmware .bin file to flash")
+    fw_flash.add_argument("--target", choices=["dongle", "headset"], default="dongle", help="Target node")
+    fw_flash.add_argument("--confirm-risk", action="store_true", help="Explicit confirmation gate for real hardware flashing")
+    fw_flash.add_argument("--dry-run", action="store_true", help="Simulate FOTA flash without transmitting live hardware writes")
 
     args = parser.parse_args()
 
@@ -260,6 +269,40 @@ def main():
                 print(format_firmware_check_plain(res))
             return
 
+        elif args.firmware_action == "flash":
+            from maxwell2.firmware import FirmwarePackage, FotaEngine, FotaSafetyError
+            pkg = FirmwarePackage(args.file)
+            is_dry = args.dry_run or not args.confirm_risk
+
+            if not is_dry:
+                print("⚠ WARNING: You are about to flash physical hardware.")
+                print("           Do NOT unplug the USB cable or power off the headset during flashing.")
+                confirm = input("Type 'CONFIRM' to proceed: ").strip()
+                if confirm != "CONFIRM":
+                    print("[-] Flash aborted by user.")
+                    return
+
+            transport = Transport(hidraw_path=args.device, dry_run=is_dry)
+            with transport:
+                client = MaxwellClient(transport)
+                engine = FotaEngine(pkg, target=args.target, client=client, dry_run=is_dry)
+
+                print(f"[*] Starting FOTA Flash {'(DRY RUN)' if is_dry else '(LIVE HARDWARE)'}:")
+                print(f"    File: {pkg.filename} (Version: {pkg.version_string})")
+                print(f"    Target Node: {args.target.upper()} • Total Chunks: {engine.total_chunks}")
+
+                def progress(p):
+                    pct = p['percent']
+                    bar = "█" * (pct // 4) + "░" * (25 - pct // 4)
+                    sys.stdout.write(f"\r    [{bar}] {pct:3d}% ({p['current_chunk']}/{p['total_chunks']}) - {p['speed_kb_s']} KB/s - ETA: {p['eta_sec']}s  ")
+                    sys.stdout.flush()
+
+                res = engine.execute(progress_callback=progress)
+                print(f"\n✔ FOTA Flash complete in {res['duration_sec']}s ({res['chunks_sent']} chunks transferred).")
+                if is_dry:
+                    print("  Note: Dry-run simulation completed. No hardware flash bytes were modified.")
+            return
+
     # Initialize transport and client
     try:
         transport = Transport(hidraw_path=args.device, dry_run=args.dry_run)
@@ -341,6 +384,18 @@ def main():
                     print(f"[+] Complete configuration dumped to {args.out}")
                 else:
                     print(json.dumps(full_dump, indent=2))
+
+            elif args.command == "limiter":
+                if args.state is None:
+                    lim = client.get_limiter()
+                    state_str = "ON (85 dB Safe)" if lim["enabled"] else "OFF (Full Range)"
+                    print(f"Hearing Safety Volume Limiter: {state_str}")
+                elif args.state == "on":
+                    client.set_limiter(True)
+                    print("[+] Hearing Safety Volume Limiter enabled (85 dB safe limit).")
+                elif args.state == "off":
+                    client.set_limiter(False)
+                    print("[+] Volume Limiter disabled (Full dynamic range).")
 
             elif args.command == "firmware":
                 from maxwell2.firmware import get_firmware_diagnostics, format_firmware_status_plain

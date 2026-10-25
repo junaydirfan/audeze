@@ -65,106 +65,75 @@ audezeforlinux status
 
 ## CLI & TUI Usage
 
-### Interactive Live Console Dashboard & Custom EQ Studio
-Launch the live, zero-scrollback, keyboard & mouse-controlled Studio TUI directly in your terminal:
+### Interactive Live Studio Dashboard
+Launch the unified 4-tab Studio TUI directly in your terminal — everything can be controlled interactively without typing individual commands:
 ```bash
 audezeforlinux dashboard
 ```
-- **Navigation & Controls**:
-  - `↑` / `↓`: Move cursor across presets and hardware controls (Sidetone, Game/Chat, AI Noise Reduction)
-  - `←` / `→`: Live adjustment of Sidetone volume, Game/Chat mix balance, or AI Noise Reduction modes
-  - `Enter` / `Space` / **Mouse Click**: Instantly activate preset or toggle setting
-  - `Tab` / **Click**: Switch between **Dashboard & Controls** and **Custom EQ Studio**
-  - `r`: Refresh live telemetry from hardware
-  - `q` / `Esc`: Exit cleanly back to your shell
-- **Custom EQ Studio**:
-  - `1` – `4`: Switch between custom hardware slots
-  - `←` / `→` or **Click**: Select frequency band (32Hz to 16kHz)
-  - `↑` / `↓` or `+` / `-`: Tune band gain in ±0.5 dB steps
-  - `s`: **Save directly to Maxwell 2 headset memory** (with automated pre-write backup snapshot)
-  - `p`: Cycle pre-tuned audio curves (Harman Curve, Bass Cannon, FPS Footsteps, V-Shape, Warm Vocal, Flat)
-  - `f`: Flatten all 10 bands to 0.0 dB
+- **Tab 1: `[ 1. CONTROLS ]` (Controls & Presets)**:
+  - `↑` / `↓`: Move cursor across 10 Presets and hardware sliders (Sidetone, Game/Chat Mix, AI Noise Reduction, Volume Limiter).
+  - `←` / `→`: Live adjustment of Sidetone volume, Game/Chat mix, or AI Noise Reduction mode.
+  - `Enter` / `Space` / **Mouse Click**: Instantly activate preset or toggle setting.
+  - `[` / `]`: Quick fine-tune sidetone volume (0..31).
+- **Tab 2: `[ 2. EQ STUDIO ]` (10-Band Graphic Equalizer)**:
+  - `1` – `4`: Switch custom hardware slots (Presets 7–10).
+  - `←` / `→` or **Click**: Select frequency band (32 Hz to 16 kHz).
+  - `↑` / `↓` or `+` / `-`: Tune band gain in ±0.5 dB steps.
+  - `s`: **Save & activate directly in Maxwell 2 headset memory**.
+  - `p`: Cycle pre-tuned audio curves (Harman Target, Bass Boost, FPS Footsteps, V-Shape, Vocal Clarity, Flat).
+  - `e`: Export current custom curve to a JSON file.
+  - `0` / `f`: Flatten all 10 bands to 0.0 dB.
+- **Tab 3: `[ 3. FIRMWARE & FLASHER ]` (Firmware & Safety Studio)**:
+  - **Live Hardware Telemetry**: Dongle & Headset version parity, battery level, and dual-bank safety status.
+  - **Official Changelog Browser**: `↑` / `↓` scroll through official Audeze Maxwell 2 releases (v1.0.5.7.4 back to v1.0.2.49) with full release notes.
+  - **FOTA Flashing & Block Simulator**:
+    - `s`: Run real-time FOTA block streaming simulation with live animated progress bar, KB/s throughput, and ETA.
+    - `t`: Toggle target node between `[ DONGLE ]` and `[ HEADSET ]`.
+    - `c`: Cancel active simulation.
+- **Tab 4: `[ 4. SYSTEM & BACKUPS ]` (Diagnostics & Backups)**:
+  - **Hardware Diagnostics**: View USB VID:PID, device nodes, SoC processor info, and NVDM balance key state.
+  - **Backups Browser**: View recent timestamped pre-write backups from `~/.config/maxwell2/backups/`.
+  - `b`: Create instant full snapshot backup of all settings & EQ curves.
+  - `d`: Export complete state to `./maxwell_dump.json`.
+  - `r`: Refresh live telemetry from device.
+- **Global Keys**:
+  - `Tab` / **Mouse Click**: Switch tabs.
+  - `q` / `Esc`: Exit cleanly back to your shell.
 
-### View Device Status
-Displays the stylized branding, active preset pill, battery gauge, mic status, and crossfader slider:
+### Volume Limiter (Hearing Safety 85 dB)
 ```bash
-audezeforlinux status
-```
-*(Add `--plain` for plain ASCII or `--json` for machine-readable JSON output).*
+# Query current volume limiter status
+audezeforlinux limiter
 
-### Switch Active Preset
-```bash
-# List all available presets
-audezeforlinux eq list
+# Enable hearing-safe 85 dB volume limit
+audezeforlinux limiter on
 
-# Select by name
-audezeforlinux eq preset "Bass Boost"
-audezeforlinux eq preset "Immersive"
-audezeforlinux eq preset "Audeze"
-
-# Select custom preset slot (1..4)
-audezeforlinux eq preset "Preset 1"
-```
-
-### Inspect & Export Custom 10-Band EQ
-```bash
-# Display 10-band profile for Custom Slot 1 (Preset 1)
-audezeforlinux eq custom 1
-
-# Export slot profile to a JSON file
-audezeforlinux eq custom 1 --export my_eq.json
-```
-
-### Adjust Sidetone
-```bash
-# Toggle sidetone on / off
-audezeforlinux sidetone on
-audezeforlinux sidetone off
-
-# Set volume level (0..31)
-audezeforlinux sidetone 15
-```
-
-### Adjust Game / Chat Balance
-```bash
-# Set Game/Chat mix by Chat percentage:
-audezeforlinux chatmix 50   # 50% Game / 50% Chat (Center)
-audezeforlinux chatmix 25   # 75% Game / 25% Chat
-audezeforlinux chatmix 80   # 20% Game / 80% Chat
-```
-
-### Full Configuration Dump
-Exports current status and all 4 custom EQ profiles as a single JSON file:
-```bash
-audezeforlinux dump --out maxwell_backup.json
-```
-
-### State Backups & Recovery
-Every change creates a snapshot in `~/.config/maxwell2/backups/`:
-```bash
-# List all automated pre-write backups
-audezeforlinux backup list
-
-# Inspect a specific backup
-audezeforlinux backup show backup_set_preset_20261025_034403.json
+# Disable limiter for full dynamic range
+audezeforlinux limiter off
 ```
 
 ### Firmware Diagnostics, Inspection & Updates
-Comprehensive tools for managing firmware lifecycle and verifying update safety:
 ```bash
 # 1. Dual-node version check, parity verification & battery safety gate
 audezeforlinux firmware
 
 # 2. Check official release catalog and changelogs against installed version
 audezeforlinux firmware check
+# Or compare directly against an official package:
+audezeforlinux firmware check --package path/to/firmware.bin
 
-# 3. Offline inspection of an official .bin firmware package (SHA-256 & partition hashes)
+# 3. Stream firmware update with dual-bank recovery safety (dry-run by default):
+audezeforlinux firmware flash path/to/firmware.bin --target dongle --dry-run
+# Live flashing requires explicit confirmation gate:
+audezeforlinux firmware flash path/to/firmware.bin --target dongle --confirm-risk
+
+# 4. Offline inspection of an official .bin firmware package (SHA-256 & partition hashes)
 audezeforlinux firmware inspect path/to/firmware.bin
 
-# 4. Decompress LZMA payload and extract individual partitions (Bootloader, Kernel, DSP, NVDM)
+# 5. Decompress LZMA payload and extract individual partitions (Bootloader, Kernel, DSP, NVDM)
 audezeforlinux firmware unpack path/to/firmware.bin --out ./extracted_firmware
 
-# 5. Simulate FOTA transmission and chunk fragmentation without touching hardware
+# 6. Simulate FOTA transmission parameters and chunk layout
 audezeforlinux firmware simulate path/to/firmware.bin --target headset
 ```
 

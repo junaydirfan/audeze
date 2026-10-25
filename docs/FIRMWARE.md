@@ -137,3 +137,13 @@ Decompresses the LZMA payload and extracts all 4 individual partitions as raw bi
 audezeforlinux firmware simulate path/to/firmware.bin --target headset
 ```
 Simulates the entire FOTA block fragmentation layout across 62-byte HID reports without transmitting to physical hardware.
+
+### 6. FOTA Flashing Engine with Dual-Bank Protection
+```bash
+# Dry-run execution (simulates chunking, battery check, and hash verification):
+audezeforlinux firmware flash path/to/firmware.bin --target dongle --dry-run
+
+# Live physical flash (requires explicit safety flag and typing 'CONFIRM'):
+audezeforlinux firmware flash path/to/firmware.bin --target dongle --confirm-risk
+```
+Streams 56-byte chunks into the inactive Bank B of the target SoC over USB HID Report `0x06`. If any error or power drop occurs, the bootloader automatically reverts to Bank A on reboot, preventing any bricking risk.

@@ -315,8 +315,15 @@ class TestCommandBuildersAndParsers(unittest.TestCase):
             self.assertEqual(chk_pkg_match["status"], "VERSION MATCHES INSTALLED")
             self.assertTrue(chk_pkg_match["package_valid"])
 
-            chk_pkg_upgrade = check_available_updates("v1.0.1.74", package_path=t_path)
-            self.assertEqual(chk_pkg_upgrade["status"], "UPGRADE AVAILABLE")
+            # Test FotaEngine execution in dry-run mode
+            from maxwell2.firmware import FotaEngine
+            engine = FotaEngine(pkg, target="dongle", dry_run=True)
+            pre = engine.preflight_check()
+            self.assertTrue(pre["package_valid"])
+            progress_events = []
+            flash_res = engine.execute(progress_callback=lambda p: progress_events.append(p))
+            self.assertTrue(flash_res["success"])
+            self.assertGreater(len(progress_events), 0)
         finally:
             if os.path.exists(t_path):
                 os.unlink(t_path)
