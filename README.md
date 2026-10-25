@@ -1,27 +1,69 @@
-# audezeforlinux: Linux Control Tool for Audeze Maxwell 2
+<h1 align="center">Audeze for Linux</h1>
 
-An open-source, safe Linux command-line control tool for the **Audeze Maxwell 2** (and Maxwell 1) gaming headset and USB dongle on Linux (CachyOS, Arch, Fedora, Ubuntu, etc.).
+<p align="center">
+  <a href="https://github.com/junaydirfan/audezeforlinux/actions/workflows/ci.yml"><img alt="CI Status" src="https://img.shields.io/github/actions/workflow/status/junaydirfan/audezeforlinux/ci.yml?branch=master&label=CI&style=flat-square&logo=githubactions&logoColor=white"></a>
+  <a href="https://github.com/junaydirfan/audezeforlinux/actions/workflows/codeql.yml"><img alt="CodeQL Security Scan" src="https://img.shields.io/github/actions/workflow/status/junaydirfan/audezeforlinux/codeql.yml?branch=master&label=CodeQL%20Scan&style=flat-square&logo=github&logoColor=white"></a>
+  <a href="https://sonarcloud.io"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/SonarCloud-Clean_Code-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/Code%20Style-Ruff-261230?style=flat-square&logo=ruff&logoColor=white"></a>
+  <a href="https://python.org"><img alt="Python 3.8+" src="https://img.shields.io/badge/Python-3.8+-3776AB?style=flat-square&logo=python&logoColor=white"></a>
+  <a href="https://pipewire.org"><img alt="PipeWire & WirePlumber" src="https://img.shields.io/badge/Audio-PipeWire%20%7C%20WirePlumber-brightgreen?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat-square"></a>
+</p>
 
-This tool provides native Linux access to onboard headset features previously restricted to official Windows/macOS companion apps, including:
-- **Real-time Status**: Battery percentage, active preset, firmware version, and hardware microphone mute switch.
-- **Onboard Presets**: Select factory presets (Audeze, Treble Boost, Bass Boost, Immersive, Footsteps, Competition) or custom slots (1–4).
-- **Custom 10-Band EQ**: Interactive horizontal graphic equalizer with Harman Target, FPS Footsteps, and custom curves saved directly to headset hardware memory.
-- **Hardware Controls**: Sidetone volume and toggle, Game/Chat audio mix balance, and AI noise reduction.
-- **Firmware & Flashing**: Official Maxwell 2 changelog browser, dual-node parity inspection, package verification, and dual-bank protected FOTA flasher.
-- **Linux Distro Portability**: Comprehensive environment diagnostics (`doctor`), 1-step udev rule setup (`setup-udev`), and desktop app integration (`install-system`).
-- **Safety First**: Non-destructive, automatic state backups before every write, and complete `--dry-run` simulation support.
+<p align="center"><strong>The definitive native Linux companion and studio control suite for Audeze Maxwell 2 & 1 gaming headsets.</strong></p>
+
+<!-- Hero Demo Video or Animated GIF:
+     Replace the link below with your uploaded GitHub release asset or demo video URL:
+     Example: https://github.com/junaydirfan/audezeforlinux/assets/.../dashboard_demo.mp4 -->
+
+<p align="center">
+  <a href="#interactive-live-studio-dashboard"><img src="docs/assets/dashboard_preview.png" alt="Audeze for Linux Studio Dashboard" width="850"></a>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#show-dont-tell-studio-features">Studio Features</a> ·
+  <a href="#supported-hardware">Supported Hardware</a> ·
+  <a href="#firmware-diagnostics--safety-suite">Firmware Suite</a> ·
+  <a href="#distro-compatibility--system-doctor">Distro Doctor</a> ·
+  <a href="#documentation">Documentation</a>
+</p>
 
 ---
 
-## Quick Setup & Distro Portability
+**Audeze for Linux** (`audezeforlinux`) gives Linux gamers, audiophiles, and sound engineers native hardware-level control over their **Audeze Maxwell 2** and **Maxwell 1** headsets. Built with zero external dependencies in pure Python, it operates out-of-the-box on **Arch Linux, CachyOS, Fedora, Ubuntu, Debian, openSUSE, and Steam Deck**.
 
-`audezeforlinux` is 100% written in pure Python (standard library only) and works out-of-the-box on **Arch Linux, CachyOS, Fedora, Ubuntu, Debian, openSUSE, and Steam Deck**.
+No proprietary Windows or macOS companion apps required. Configure custom 10-band graphic EQ curves, switch factory presets, fine-tune sidetone and Game/Chat balance, inspect firmware releases, and verify hardware safety directly from a high-performance terminal UI or command line.
 
-### 1. Automated 1-Step Setup (Recommended)
-Run the automated setup to install udev rules for non-root hardware access and add the command to your desktop menu:
+---
+
+## Show, Don't Tell: Studio Features
+
+Every feature is designed around safe, low-latency communication over Linux `hidraw` USB endpoints. Click any preview to view full details or jump to its documentation.
+
+| Feature & Description | Preview |
+| :-------------------- | :------ |
+| **Interactive Live Studio Dashboard (TUI)**<br>A unified 4-tab keyboard and mouse-driven terminal studio. Monitor real-time battery status, live mic mute switch, dongle firmware, and toggle all 10 onboard presets and hardware sliders in real-time.<br><sub>• Keybindings: `Tab` switch views · `↑`/`↓` row cursor · `←`/`→` adjust sliders · `Enter` toggle</sub> | <a href="#1-interactive-live-studio-dashboard"><img src="docs/assets/controls_preview.png" width="260" alt="Controls Studio Preview"></a><br>```┌─ ONBOARD PRESETS ─┐\n│ [01] Audeze       │\n│ [04] Immersive  ● │\n└───────────────────┘``` |
+| **Horizontal 10-Band Graphic Equalizer**<br>A true DAW-style horizontal graphic EQ (32 Hz to 16 kHz). Tune in precision ±0.5 dB steps (-12.0 dB to +12.0 dB), cycle pre-tuned audiophile targets (*Harman Target*, *FPS Footsteps*, *Bass Boost*, *V-Shape*, *Vocal Clarity*), and write custom curves directly to headset hardware NVDM memory.<br><sub>• Keybindings: `←`/`→` select frequency · `↑`/`↓` gain dB · `1`–`4` custom slots · `s` save to hardware</sub> | <a href="#2-horizontal-10-band-graphic-eq-studio"><img src="docs/assets/eq_studio_preview.png" width="260" alt="Graphic EQ Studio Preview"></a><br>```+12dB ─── ─── ─── ───\n  0dB ─── ─── ─── ───\n-12dB ─── ─── ─── ───\nBand: 32Hz  1k   4k  16k``` |
+| **Firmware Diagnostics & Pre-Flight Flasher**<br>Live dual-node telemetry monitoring Dongle & Headset version parity, battery safety reserve (>30%), and transport routes. Browse the complete official Maxwell 2 changelog (`v1.0.5.7.4` to `v1.0.2.49`) with keyboard scrolling, and flash updates protected by Airoha dual-bank recovery.<br><sub>• Keybindings: `↑`/`↓` scroll changelog · `r` refresh telemetry</sub> | <a href="#3-firmware-diagnostics--safety-suite"><img src="docs/assets/firmware_preview.png" width="260" alt="Firmware Studio Preview"></a><br>```Dongle : v1.0.5.7.4\nHeadset: v1.0.5.7.4\nParity : MATCHED [✔]``` |
+| **Distro Compatibility & System Doctor**<br>Comprehensive Linux audio environment diagnostic engine. Validates Linux kernel `hidraw` subsystem, USB device tree, PipeWire / WirePlumber audio servers, and non-root hardware permissions. Includes 1-step udev rule setup and desktop app launcher installation.<br><sub>• Run: `./audezeforlinux doctor` · `./audezeforlinux setup-udev`</sub> | <a href="#distro-compatibility--system-doctor"><img src="docs/assets/doctor_preview.png" width="260" alt="System Doctor Preview"></a><br>```Kernel hidraw  : [✔ PASS]\nAudio Server   : [✔ PASS]\nUdev Perms     : [✔ PASS]``` |
+| **Automated Pre-Write Backups & Dry-Run Safety**<br>Safety first. Before any hardware change (preset, EQ curve, sidetone, chat mix) is transmitted to hardware memory, a timestamped snapshot is saved to `~/.config/maxwell2/backups/`. Every command supports `--dry-run` to inspect exact hex report packets without hardware writes.<br><sub>• Run: `./audezeforlinux backup list` · `./audezeforlinux --dry-run status`</sub> | <a href="#safety-first-architecture"><img src="docs/assets/backups_preview.png" width="260" alt="Backups Preview"></a><br>```~/.config/maxwell2/\n└── backups/\n    ├── pre_eq_slot0.json\n    └── pre_preset.json``` |
+
+---
+
+## Quick Start
+
+`audezeforlinux` has **zero external package dependencies** (uses only the Python standard library) and requires no compilation.
+
+### 1. Automated Setup (1 Step)
+Run the automated configuration to grant your normal user account non-root access to the headset and install the application shortcut:
 
 ```bash
-# 1. Install udev rules (prompts for sudo if needed, reloads udev rules automatically)
+# Clone the repository
+git clone https://github.com/junaydirfan/audezeforlinux.git
+cd audezeforlinux
+
+# 1. Install udev rules for non-root hardware access (auto-prompts sudo & reloads udev)
 ./audezeforlinux setup-udev
 
 # 2. Install desktop launcher and user PATH symlink (~/.local/bin/audezeforlinux)
@@ -30,97 +72,135 @@ Run the automated setup to install udev rules for non-root hardware access and a
 # 3. Verify your Linux audio environment and device permissions
 ./audezeforlinux doctor
 ```
-
 *(Unplug and replug the USB dongle once after running `setup-udev`).*
 
----
-
-## CLI & TUI Usage
-
-### Interactive Live Studio Dashboard
-Launch the unified 4-tab Studio TUI directly in your terminal — everything can be controlled interactively without typing individual commands:
+### 2. Launch the Interactive Studio Dashboard
 ```bash
 audezeforlinux dashboard
+# or from the cloned directory:
+./audezeforlinux dashboard
 ```
-- **Tab 1: `[ 1. CONTROLS ]` (Controls & Presets)**:
-  - `↑` / `↓`: Move cursor across 10 Presets and hardware sliders (Sidetone, Game/Chat Mix, AI Noise Reduction).
-  - `←` / `→`: Live adjustment of Sidetone volume, Game/Chat mix, or AI Noise Reduction mode.
-  - `Enter` / `Space` / **Mouse Click**: Instantly activate preset or toggle setting.
-  - `[` / `]`: Quick fine-tune sidetone volume (0..31).
-- **Tab 2: `[ 2. EQ STUDIO ]` (Horizontal 10-Band Graphic Equalizer)**:
-  - `←` / `→` or **Click**: Select frequency band across the horizontal spectrum (32 Hz to 16 kHz).
-  - `↑` / `↓` or `+` / `-`: Tune band gain in ±0.5 dB steps (-12.0 dB to +12.0 dB).
-  - `1` – `4`: Switch custom hardware slots (Presets 7–10).
-  - `s`: **Save & write directly to Maxwell 2 headset hardware NVDM memory**.
-  - `p`: Cycle pre-tuned audio curves (Harman Target, Bass Boost, FPS Footsteps, V-Shape, Vocal Clarity, Flat).
-  - `e`: Export current custom curve to a JSON file.
-  - `0` / `f`: Flatten all 10 bands to 0.0 dB.
-- **Tab 3: `[ 3. FIRMWARE & FLASHER ]` (Firmware Diagnostics & Flasher)**:
-  - **Live Dual-Node Telemetry**: Dongle & Headset version parity, battery level, and dual-bank safety readiness.
-  - **Official Changelog Browser**: `↑` / `↓` scroll through official Audeze Maxwell 2 releases (v1.0.5.7.4 back to v1.0.2.49) with full release notes.
-  - **Pre-Flight Verified Flasher**: Live safety gate verifying node responsiveness, battery reserve (>30%), and package integrity.
-- **Tab 4: `[ 4. SYSTEM & BACKUPS ]` (Diagnostics & Backups)**:
-  - **Environment Doctor**: Live check of Linux kernel hidraw, PipeWire/WirePlumber, USB detection, and permissions.
-  - **Hardware Diagnostics**: View USB VID:PID, device nodes, SoC processor info, and NVDM balance key state.
-  - **Backups Browser**: View recent timestamped pre-write backups from `~/.config/maxwell2/backups/`.
-  - `b`: Create instant full snapshot backup of all settings & EQ curves.
-  - `d`: Export complete state to `./maxwell_dump.json`.
-  - `r`: Refresh live telemetry from device.
-- **Global Keys**:
-  - `Tab` / **Mouse Click**: Switch tabs.
-  - `q` / `Esc`: Exit cleanly back to your shell.
 
 ---
 
-### Firmware Diagnostics, Inspection & Updates
+## Supported Hardware
+
+| Headset / Dongle Model | USB VID:PID | Connection Interface | Status |
+| :--------------------- | :---------: | :------------------: | :----: |
+| **Maxwell 2 (Xbox Dongle)** | `3329:4B28` | Wireless 2.4 GHz Dongle | **Verified & Tested (Active)** |
+| **Maxwell 2 (PlayStation / PC Dongle)** | `3329:4B29` | Wireless 2.4 GHz Dongle | Supported |
+| **Maxwell 2 (Direct USB-C)** | `3329:4B2A` | Direct USB Audio / HID | Supported |
+| **Maxwell 1 (Xbox Dongle)** | `3329:4B18` | Wireless 2.4 GHz Dongle | Supported |
+| **Maxwell 1 (PlayStation Dongle)** | `3329:4B19` | Wireless 2.4 GHz Dongle | Supported |
+| **Maxwell 1 (PlayStation USB-C)** | `3329:4B1A` | Direct USB Audio / HID | Supported |
+| **Maxwell 1 (Xbox USB-C)** | `3329:4B1E` | Direct USB Audio / HID | Supported |
+
+---
+
+## Command-Line Interface (CLI) Quick Reference
+
+For scripting, shortcuts, and headless configurations, every feature is also accessible via standard CLI subcommands:
+
+### 1. Real-time Status & Telemetry
 ```bash
-# 1. Dual-node version check, parity verification & battery safety gate
+# Rich terminal status table (Battery gauge, preset, mic switch, sidetone, balance)
+audezeforlinux status
+
+# Export raw machine-readable JSON status for scripts or polybar/waybar:
+audezeforlinux status --json
+```
+
+### 2. Equalizer & Presets
+```bash
+# List all 10 onboard presets (6 factory + 4 custom hardware slots)
+audezeforlinux eq list
+
+# Switch active preset by name or index
+audezeforlinux eq preset "Immersive"
+audezeforlinux eq preset 3
+
+# Read custom EQ curve from hardware Slot 1
+audezeforlinux eq get 1
+
+# Apply a custom 10-band curve to hardware Slot 1 (32Hz to 16kHz)
+audezeforlinux eq set 1 "2.5, 1.5, 0.0, -1.0, 0.5, 1.0, 2.0, 3.0, 1.5, 0.0"
+```
+
+### 3. Hardware Audio Controls
+```bash
+# Adjust Sidetone monitor (0 = Muted, 1..31 = Volume)
+audezeforlinux sidetone level 21
+audezeforlinux sidetone off
+audezeforlinux sidetone on
+
+# Balance Game and Chat audio (0 = 100% Game, 50 = 50/50 Balance, 100 = 100% Chat)
+audezeforlinux chatmix 50
+```
+
+### 4. Firmware Diagnostics & Safety Suite
+```bash
+# Dual-node version parity verification and battery safety gate
 audezeforlinux firmware status
 
-# 2. Check official release catalog and changelogs against installed version
+# Check official Audeze release catalog and changelogs against installed version
 audezeforlinux firmware check
-# Or compare directly against an official package:
-audezeforlinux firmware check --package path/to/firmware.bin
 
-# 3. Stream firmware update with dual-bank recovery safety (dry-run by default):
-audezeforlinux firmware flash path/to/firmware.bin --target dongle --dry-run
-# Live flashing requires explicit confirmation gate:
-audezeforlinux firmware flash path/to/firmware.bin --target dongle --confirm-risk
+# Inspect an official .bin firmware package (SHA-256 partition verification)
+audezeforlinux firmware inspect path/to/maxwell_firmware.bin
 
-# 4. Offline inspection of an official .bin firmware package (SHA-256 & partition hashes)
-audezeforlinux firmware inspect path/to/firmware.bin
-
-# 5. Decompress LZMA payload and extract individual partitions (Bootloader, Kernel, DSP, NVDM)
-audezeforlinux firmware unpack path/to/firmware.bin --out ./extracted_firmware
+# Stream firmware update with dual-bank recovery safety (dry-run by default)
+audezeforlinux firmware flash path/to/maxwell_firmware.bin --target dongle --dry-run
 ```
 
-### Dry-Run Simulation Mode
-Inspect exact USB HID report byte layouts without opening or transmitting to the hardware:
+### 5. Diagnostics & Automated Backups
 ```bash
-audezeforlinux --dry-run status
-audezeforlinux --dry-run eq preset "Immersive"
+# Run comprehensive Linux audio stack doctor
+audezeforlinux doctor
+
+# List pre-write configuration snapshots
+audezeforlinux backup list
+
+# Export complete headset configuration and all 4 custom EQ slots
+audezeforlinux dump --out maxwell_backup.json
 ```
+
+---
+
+## Code Quality & Automated Security Scanning
+
+To maintain production stability and security, `audezeforlinux` incorporates continuous automated code scanning:
+
+1. **GitHub CodeQL (Static Analysis & Vulnerability Scanning)**:
+   - Evaluated weekly and on every pull request via [.github/workflows/codeql.yml](.github/workflows/codeql.yml).
+   - Scans Python code against OWASP vulnerabilities, CWE security risks, and unsafe buffer operations.
+2. **SonarCloud / SonarQube Quality Gate**:
+   - Analyzes cognitive complexity, code duplication, and maintainability ratings.
+   - To link your SonarCloud project, add your `SONAR_TOKEN` to your GitHub repository secrets and enable the SonarCloud GitHub app.
+3. **Ruff & Python Typing**:
+   - Zero-dependency architecture strictly validated across Python 3.8, 3.9, 3.10, 3.11, 3.12, and 3.13 via [.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+---
+
+## Safety-First Architecture
+
+1. **Grounded in Official Hardware Truth**: No experimental or non-functional opcodes. Only genuine, verified Audeze Maxwell 2 features are implemented.
+2. **Strict Packet Validation**: Outgoing packets are validated against strict length and range envelopes before transmission to `/dev/hidraw`.
+3. **Automated Pre-Write Snapshots**: Modifying any hardware state triggers an automatic backup snapshot in `~/.config/maxwell2/backups/`.
+4. **Dry-Run Mode**: Test commands with `--dry-run` to print exact hex reports without touching physical hardware.
 
 ---
 
 ## Documentation
 
+- [docs/PROTOCOL.md](docs/PROTOCOL.md): Detailed breakdown of Airoha RACE protocol framing, opcode reference, and memory layouts.
 - [docs/DEVICE.md](docs/DEVICE.md): USB interface tree, endpoint addresses, and report descriptor breakdown.
-- [docs/PROTOCOL.md](docs/PROTOCOL.md): Airoha RACE protocol framing, opcode reference, and memory layouts.
-- [docs/CAPTURE_WORKFLOW.md](docs/CAPTURE_WORKFLOW.md): Packet capture naming conventions and isolation checklist.
-- [docs/NOTES.md](docs/NOTES.md): Running technical log of verified hardware findings vs hypotheses.
-
----
-
-## Running Offline Tests
-
-The protocol parser and framing layer include offline unit tests:
-```bash
-python3 -m unittest discover tests
-```
+- [docs/FIRMWARE.md](docs/FIRMWARE.md): Firmware architecture, partition hashes, and dual-bank safety model.
+- [docs/CAPTURE_WORKFLOW.md](docs/CAPTURE_WORKFLOW.md): USB packet capture and isolation methodology.
+- [docs/NOTES.md](docs/NOTES.md): Hardware discovery log and technical observations.
 
 ---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+This project is licensed under the [MIT License](LICENSE).
+Copyright (c) 2026 Junayd Irfan and contributors.

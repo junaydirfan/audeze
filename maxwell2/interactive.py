@@ -334,7 +334,7 @@ class CursesTUI:
             num_str = f"[{i:02d}]"
             active_badge = " [ACTIVE]" if is_active else "         "
 
-            name_display = name[:14].ljust(14)
+            name_display = name[:17].ljust(17)
             line = f"│{cursor_marker}{num_str} {name_display}{active_badge}│"
 
             if is_cursor:
