@@ -4,6 +4,7 @@ Implements status queries, control adjustments, EQ profile management,
 and pre-write backup snapshots.
 """
 
+import time
 from typing import Dict, Any, Optional, Union, List
 from maxwell2.protocol import (
     build_read_preset_command,
@@ -292,6 +293,10 @@ class MaxwellClient:
                 "backup_file": backup_path,
                 "dry_run": True,
             }
+
+        # Allow DSP brief settling time to reload preset and drain write ACK
+        time.sleep(0.06)
+        self.transport.poll_input_report()
 
         # 3. Read back to verify
         new_preset = self.get_preset()
