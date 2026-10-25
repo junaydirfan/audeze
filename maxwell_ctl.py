@@ -2,7 +2,7 @@
 """
 maxwell-ctl: Linux CLI control tool for Audeze Maxwell 2 headset and USB dongle.
 Supports device status, preset switching, custom 10-band EQ import/export,
-sidetone, chat mix, noise reduction, and state backups.
+sidetone, chat mix, noise reduction, state backups, and interactive dashboard.
 """
 
 import sys
@@ -16,52 +16,56 @@ from maxwell2.client import MaxwellClient
 from maxwell2.protocol import PRESET_NAMES
 from maxwell2.backup import list_backups, load_backup
 
+# Rich UI integration
+try:
+    from maxwell2.ui import (
+        print_rich_status,
+        render_eq_spectrum,
+        print_rich_preset_success,
+        create_console,
+        RICH_AVAILABLE,
+    )
+except ImportError:
+    RICH_AVAILABLE = False
 
-def format_status(status: dict) -> str:
+
+def format_plain_status(status: dict) -> str:
     lines = []
     lines.append("=" * 60)
     lines.append("  AUDEZE MAXWELL 2 - DEVICE STATUS")
     lines.append("=" * 60)
 
-    # Preset
     preset = status.get("preset", {})
     p_name = preset.get("name", "Unknown")
     p_idx = preset.get("index", "?")
     p_custom = " (Custom Slot " + str(preset.get("slot") + 1) + ")" if preset.get("is_custom") else ""
     lines.append(f"  Active Preset      : [{p_idx}] {p_name}{p_custom}")
 
-    # Battery
     batt = status.get("battery_percent")
     batt_str = f"{batt}%" if batt is not None else "Unknown / Disconnected"
     lines.append(f"  Battery Level      : {batt_str}")
 
-    # Firmware
     fw = status.get("firmware", {}).get("firmware", "Unknown")
     lines.append(f"  Firmware Version   : {fw}")
 
-    # Mic Mute
     mute = status.get("mic_muted")
     mute_str = "MUTED" if mute is True else ("UNMUTED" if mute is False else "Unknown")
     lines.append(f"  Hardware Mic Switch: {mute_str}")
 
-    # Sidetone
     st = status.get("sidetone", {})
     st_state = "ON" if st.get("enabled") else "OFF"
     st_lvl = st.get("level", 0)
     st_max = st.get("max_level", 31)
     lines.append(f"  Sidetone           : {st_state} (Level {st_lvl}/{st_max})")
 
-    # Chat Mix
     cm = status.get("chat_mix", {})
     game_pct = cm.get("game_pct", 50)
     chat_pct = cm.get("chat_pct", 50)
     lines.append(f"  Game / Chat Mix    : Game {game_pct}% | Chat {chat_pct}%")
 
-    # Noise Reduction
     nr = status.get("noise_reduction", {}).get("name", "Unknown")
     lines.append(f"  AI Noise Reduction : {nr}")
 
-    # Limiter
     lim = status.get("limiter", {}).get("enabled")
     lim_str = "Enabled (85 dB)" if lim else "Disabled"
     lines.append(f"  Volume Limiter     : {lim_str}")
@@ -70,7 +74,7 @@ def format_status(status: dict) -> str:
     return "\n".join(lines)
 
 
-def format_eq(eq_data: dict) -> str:
+def format_plain_eq(eq_data: dict) -> str:
     lines = []
     slot = eq_data.get("slot", 0)
     lines.append("=" * 60)
@@ -99,13 +103,18 @@ def main():
     parser.add_argument("--device", help="Direct path to /dev/hidraw node (auto-detected by default)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate commands and print bytes without sending")
     parser.add_argument("--json", action="store_true", help="Format CLI output as JSON")
+    parser.add_argument("--plain", action="store_true", help="Disable rich terminal colors and formatting")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # 1. status
     subparsers.add_parser("status", help="Read headset status (battery, preset, mic, controls)")
 
-    # 2. eq
+    # 2. dashboard / interactive
+    subparsers.add_parser("dashboard", help="Open live interactive keyboard-controlled dashboard")
+    subparsers.add_parser("interactive", help="Alias for dashboard")
+
+    # 3. eq
     eq_parser = subparsers.add_parser("eq", help="Equalizer controls")
     eq_sub = eq_parser.add_subparsers(dest="eq_action", required=True)
 
@@ -122,19 +131,19 @@ def main():
     eq_custom.add_argument("--file", help="JSON profile to write to the slot")
     eq_custom.add_argument("--export", help="Save the slot's current EQ profile to a JSON file")
 
-    # 3. sidetone
+    # 4. sidetone
     st_parser = subparsers.add_parser("sidetone", help="Control sidetone")
     st_parser.add_argument("value", help="Level (0..31), 'on', or 'off'")
 
-    # 4. chatmix
+    # 5. chatmix
     cm_parser = subparsers.add_parser("chatmix", help="Adjust Game/Chat balance (0..100 percent Chat)")
     cm_parser.add_argument("value", type=int, help="Chat percentage (0 = 100 percent Game, 50 = 50/50, 100 = 100 percent Chat)")
 
-    # 5. dump
+    # 6. dump
     dump_parser = subparsers.add_parser("dump", help="Dump complete state and all 4 custom EQ slots as JSON")
     dump_parser.add_argument("--out", help="Save dump to specified JSON file")
 
-    # 6. backup
+    # 7. backup
     bk_parser = subparsers.add_parser("backup", help="Manage automated pre-write configuration backups")
     bk_sub = bk_parser.add_subparsers(dest="backup_action", required=True)
     bk_sub.add_parser("list", help="List all available backups")
@@ -180,17 +189,26 @@ def main():
         with transport:
             client = MaxwellClient(transport)
 
+            if args.command in ("dashboard", "interactive"):
+                from maxwell2.interactive import run_interactive_dashboard
+                run_interactive_dashboard(client)
+                return
+
             if args.command == "status":
                 status = client.get_status()
                 if args.json:
                     print(json.dumps(status, indent=2))
+                elif RICH_AVAILABLE and not args.plain and sys.stdout.isatty():
+                    print_rich_status(status)
                 else:
-                    print(format_status(status))
+                    print(format_plain_status(status))
 
             elif args.command == "eq" and args.eq_action == "preset":
                 res = client.set_preset(args.name)
                 if args.json:
                     print(json.dumps(res, indent=2))
+                elif RICH_AVAILABLE and not args.plain and sys.stdout.isatty():
+                    print_rich_preset_success(res["preset"], res["backup_file"], res.get("dry_run"))
                 else:
                     p = res["preset"]
                     dry = " [DRY-RUN]" if res.get("dry_run") else ""
@@ -207,8 +225,13 @@ def main():
                     print(f"[+] Exported Custom Preset {args.slot} to {args.export}")
                 elif args.json:
                     print(json.dumps(eq_data, indent=2))
+                elif RICH_AVAILABLE and not args.plain and sys.stdout.isatty():
+                    console = create_console()
+                    console.print()
+                    console.print(render_eq_spectrum(eq_data.get("bands", [])))
+                    console.print()
                 else:
-                    print(format_eq(eq_data))
+                    print(format_plain_eq(eq_data))
 
             elif args.command == "sidetone":
                 val_str = args.value.strip().lower()
@@ -228,7 +251,6 @@ def main():
                         sys.exit(1)
 
             elif args.command == "chatmix":
-                # Convert 0..100% Chat to 0..20 raw value
                 raw_val = int((args.value / 100.0) * 20)
                 raw_val = max(0, min(20, raw_val))
                 res = client.set_chat_mix(raw_val)
