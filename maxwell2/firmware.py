@@ -385,7 +385,9 @@ def check_available_updates(current_version: str, package_path: Optional[str] = 
     Evaluates update availability against the local baseline catalog or an explicit firmware package (.bin).
     Data provenance is explicitly surfaced to distinguish hardware reads from offline catalog entries.
     """
-    is_v2 = "1.0.5" in current_version
+    # Maxwell 1 shipped 1.0.1.x firmware; every Maxwell 2 build (1.0.2.49 and up) is newer than that.
+    # Matching on the "1.0.5" substring mislabelled 1.0.2.x Maxwell 2 units as Maxwell 1.
+    is_v2 = parse_version_tuple(current_version) >= (1, 0, 2)
     cat_key = "maxwell2" if is_v2 else "maxwell1"
     catalog = FIRMWARE_CATALOG.get(cat_key, FIRMWARE_CATALOG["maxwell2"])
 
